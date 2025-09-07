@@ -1,5 +1,5 @@
 const dotenv = require("dotenv");
-dotenv.config();
+
 require('dotenv').config(); // MUST be first
 
 const express = require("express");
@@ -49,21 +49,15 @@ app.use('/sounds', express.static(path.join(__dirname, 'sounds')));
 app.use(express.static(path.join(__dirname, "public")));
 
 // Telegram bot webhook
+// Telegram bot webhook
 const TelegramBot = require('node-telegram-bot-api');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_DEV_TOKEN';
 
-// Use dynamic port from environment (important for hosting)
+// Initialize bot **without binding a port**
+global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
 
-
-global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
-  webHook: {
-    port: PORT,
-  },
-});
-
-console.log(`[Telegram Bot Initialized on port ${PORT}]`);
-
+// Tell Telegram where your webhook URL is
 
 
 app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
