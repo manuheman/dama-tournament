@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin - Registered Tournaments</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+
+<body>
+  <div class="container">
+    <nav>
+      <a href="admin-win.html" class="active">Wins</a>
+     <a href="/admin-user.html">Users</a>
+    <a href="/admin-tournament.html">Tournaments</a>
+    <a href="/admin-fixture.html">Fixture</a>
+    <a href="/admin-fixture-generated.html">Generated Fixtures</a>
+      <!-- add more nav links as needed -->
+    </nav>
+
+
+    <h1>Registered Tournaments</h1>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Tournament Type</th>
+          <th>Balance (Birr)</th>
+          <th>Status</th>
+          <th>Players Count</th>
+          <th>Players (Usernames)</th>
+          <th>Unique ID</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="tournaments-table-body">
+        <!-- Rows will be dynamically inserted here -->
+      </tbody>
+    </table>
+  </div>
+
+  <script src="admin-tournament.js"></script>
+</body>
+
+</html>

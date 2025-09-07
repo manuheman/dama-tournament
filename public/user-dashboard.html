@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>User Tournament Dashboard</title>
+<link rel="stylesheet" href="user-dashboard.css" />
+<meta name="theme-color" content="#0a0a0a" />
+</head>
+<body>
+<header class="app-header">
+<div class="brand">
+  <div class="logo">♟</div>
+  <div class="titles">
+    <h1>Dama Arena</h1>
+    <p id="tournament-info" class="subtitle"></p>
+
+<nav id="tournament-type-nav" class="tournament-nav">
+  <button class="nav-btn" data-period="Silver">Silver</button>
+  <button class="nav-btn" data-period="Gold">Gold</button>
+  <button class="nav-btn" data-period="Platinum">Platinum</button>
+</nav>
+
+
+
+  </div>
+</div>
+<div class="header-actions">
+  <button id="refresh-btn" class="btn ghost">Refresh</button>
+</div>
+</header>
+
+<main class="container">
+<section class="hero-card">
+  <div class="hero-text">
+    <h2 id="user-name">Welcome</h2>
+    <p id="tournament-id-info" class="muted"></p>
+    <p class="muted">Track matches, view previous results and jump back into your games.</p>
+  </div>
+  <div class="hero-stats">
+    <div class="stat">
+      <span id="stat-upcoming" class="stat-value">0</span>
+      <span class="stat-label">Upcoming</span>
+    </div>
+    <div class="stat">
+      <span id="stat-active" class="stat-value">0</span>
+      <span class="stat-label">Active</span>
+    </div>
+    <div class="stat">
+      <span id="stat-completed" class="stat-value">0</span>
+      <span class="stat-label">Completed</span>
+    </div>
+  </div>
+</section>
+
+<nav class="tabs" role="tablist" aria-label="Dashboard Sections">
+  <button class="tab active" role="tab" aria-selected="true" aria-controls="panel-matches" id="tab-matches" data-tab="matches">
+    Matches
+  </button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="panel-history" id="tab-history" data-tab="history">
+    History
+  </button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="panel-results" id="tab-results" data-tab="results">
+    Results
+  </button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="panel-profile" id="tab-profile" data-tab="profile">
+    Profile
+  </button>
+</nav>
+
+<section id="panel-matches" class="panel active" role="tabpanel" aria-labelledby="tab-matches">
+  <div id="matches-list" class="cards" role="list"></div>
+  <p id="matches-empty" class="empty muted" hidden>No matches found.</p>
+</section>
+
+<section id="panel-history" class="panel" role="tabpanel" aria-labelledby="tab-history">
+  <div id="history-list" class="cards" role="list"></div>
+  <p id="history-empty" class="empty muted" hidden>No completed matches yet.</p>
+</section>
+
+<section id="panel-results" class="panel" role="tabpanel" aria-labelledby="tab-results">
+  <!-- Toolbar -->
+  <div class="results-toolbar">
+    <div class="filters-left">
+      <div class="chips" role="group" aria-label="Outcome filter">
+        <button class="chip chip-active" data-outcome="all">All</button>
+        <button class="chip" data-outcome="win">Wins</button>
+        <button class="chip" data-outcome="loss">Losses</button>
+        <button class="chip" data-outcome="draw">Draws</button>
+      </div>
+      <select id="results-tournament-filter" class="select" aria-label="Tournament filter">
+        <option value="all">All tournaments</option>
+      </select>
+    </div>
+    <div class="filters-right">
+      <div class="search">
+        <input id="results-search" type="search" placeholder="Search opponent..." aria-label="Search opponent" />
+      </div>
+      <select id="results-sort" class="select" aria-label="Sort results">
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+      </select>
+      <button id="results-refresh" class="btn ghost">Refresh</button>
+    </div>
+  </div>
+
+  <!-- Results content -->
+  <div id="results-groups" class="results-groups" role="list"></div>
+
+  <!-- Empty + Skeleton -->
+  <p id="results-empty" class="empty muted" hidden>No previous matches yet.</p>
+  <div id="results-skeleton" class="results-skeleton" hidden>
+    <div class="skeleton-card"></div>
+    <div class="skeleton-card"></div>
+    <div class="skeleton-card"></div>
+  </div>
+</section>
+
+
+<section id="panel-profile" class="panel" role="tabpanel" aria-labelledby="tab-profile">
+  <div class="profile-card">
+    <div class="profile-row">
+      <span class="label">Name</span>
+      <span id="profile-name" class="value">—</span>
+    </div>
+    <div class="profile-row">
+      <span class="label">Tournament</span>
+      <span id="profile-tournament" class="value">—</span>
+    </div>
+    <div class="profile-row">
+      <span class="label">Balance</span>
+      <span id="profile-balance" class="value">—</span>
+    </div>
+    <div class="profile-row">
+      <span class="label">Type</span>
+      <span id="profile-type" class="value">—</span>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="app-footer">
+<span>Built for competitive Dama</span>
+<span class="dot">•</span>
+<a href="admin-win.html" class="link">Admin</a>
+</footer>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="user-dashboard.js"></script>
+</body>
+</html>

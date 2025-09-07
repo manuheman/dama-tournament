@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin - Registered Users</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="container">
+   <nav>
+      <a href="admin-win.html" class="active">Wins</a>
+     <a href="/admin-user.html">Users</a>
+    <a href="/admin-tournament.html">Tournaments</a>
+    <a href="/admin-fixture.html">Fixture</a>
+    <a href="/admin-fixture-generated.html">Generated Fixtures</a>
+      <!-- add more nav links as needed -->
+</nav>
+    <h1>Registered Users</h1>
+
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>Telegram Username</th>
+          <th>Phone Number</th>
+          <th>Telegram ID</th>
+        </tr>
+      </thead>
+      <tbody id="users-table-body">
+        <!-- Rows will be dynamically inserted here -->
+      </tbody>
+    </table>
+  </div>
+
+  <script src="admin-user.js"></script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dama Match</title>
+<link rel="stylesheet" href="game.css" />
+</head>
+<body>
+<header class="game-header">
+  <button class="nav-btn" onclick="history.back()" aria-label="Back">← Back</button>
+  <div class="players-bar">
+    <div class="player-pill you" id="you-pill">
+      <span class="dot"></span>
+      <span class="label">You</span>
+    </div>
+    <div class="vs-pill">VS</div>
+    <div class="player-pill opp" id="opp-pill">
+      <span class="dot"></span>
+      <span class="label">Opponent</span>
+    </div>
+  </div>
+  <div class="timer" id="timer">10:00</div>
+</header>
+
+<main class="game-shell">
+  <aside class="side-panel">
+    <div class="panel-card">
+      <div id="turn-indicator" class="turn">Turn: Loading...</div>
+      <div class="turn-timer" id="turn-timer">00:30</div>
+
+      <div id="message" class="hint" aria-live="polite" role="alert"></div>
+    </div>
+    
+  </aside>
+
+  <section class="board-wrap">
+    <div id="board" aria-label="Dama game board" role="grid" tabindex="0"></div>
+<div id="waiting-overlay" class="waiting-overlay">
+<span id="waiting-message">Waiting for opponent to join.. (up to 5 min max)</span>
+<button id="returnBtn" disabled>
+  Return to Dashboard (<span id="countdown">05:00</span>)
+</button>
+
+</div>
+
+
+
+  </section>
+</main>
+
+<!-- Game result overlay -->
+<div id="game-result-overlay" class="overlay" style="display:none">
+  <div class="overlay-card">
+    <div id="game-result-message" class="overlay-text"></div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center;">
+      <button id="close-overlay-btn" class="btn" onclick="document.getElementById('game-result-overlay').style.display='none'">Close</button>
+      <button id="return-dashboard-btn" class="btn">Return to Dashboard</button>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

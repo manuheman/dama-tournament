@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin - Generate Fixtures</title>
+  <link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div class="container">
+     <nav>
+      <a href="admin-win.html" class="active">Wins</a>
+     <a href="/admin-user.html">Users</a>
+    <a href="/admin-tournament.html">Tournaments</a>
+    <a href="/admin-fixture.html">Fixture</a>
+    <a href="/admin-fixture-generated.html">Generated Fixtures</a>
+      <!-- add more nav links as needed -->
+    </nav>
+
+
+    <h1>Generate Fixtures by Tournament Code</h1>
+
+    <form id="fixture-form">
+      <label for="uniqueId">Enter Tournament Code:</label>
+      <input type="text" id="uniqueId" name="uniqueId" required />
+      <button type="submit">Generate Fixture</button>
+    </form>
+
+    <div id="fixture-result" style="margin-top: 20px;"></div>
+  </div>
+
+  <script src="admin-fixture.js"></script>
+</body>
+</html>
