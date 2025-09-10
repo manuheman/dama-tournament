@@ -1,0 +1,34 @@
+name: Deploy Dama Game
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+
+    - name: Install dependencies
+      run: npm install
+
+    - name: Deploy to VPS
+      uses: appleboy/ssh-action@v0.1.9
+      with:
+        host: ${{ secrets.VPS_HOST }}
+        username: ${{ secrets.VPS_USER }}
+        key: ${{ secrets.VPS_KEY }}
+        script: |
+          cd /home/youruser/dama-tournament
+          git pull origin main
+          npm install
+          pm2 reload dama-tournament --update-env
