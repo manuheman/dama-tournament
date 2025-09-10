@@ -49,7 +49,7 @@ const mainMenuButtons = (chatId) => [
   ],
   [
     { text: '📝 Register Tournament', callback_data: 'register_tournament' },
-  
+   { text: '📊 View Leaderboard', callback_data: 'view_leaderboard' }
   ],
   [
     { text: '📅 Fixtures', callback_data: 'fixture' },
