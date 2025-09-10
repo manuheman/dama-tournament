@@ -1,6 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
-
 const path = require('path');
 const User = require('./models/user');
 const Tournament = require('./models/tournament');
@@ -49,11 +48,11 @@ const mainMenuButtons = (chatId) => [
   ],
   [
     { text: '📝 Register Tournament', callback_data: 'register_tournament' },
-   { text: '📊 View Leaderboard', callback_data: 'view_leaderboard' }
+    { text: 'ℹ️ My team', callback_data: 'team' }
   ],
   [
     { text: '📅 Fixtures', callback_data: 'fixture' },
-     { text: '🤝 Join Group', url: 'https://t.me/EthioDamaTournament' }
+    { text: '🤝 Join Group', url: 'https://t.me/EthioDamaTournament' }
   ],
   [
     { text: '📞 Contact Us', callback_data: 'contact_us' },
@@ -78,17 +77,15 @@ async function editMessage(chatId, messageId, text, buttons) {
 }
 
 async function getUserFixtures(userId) {
-  // Find all fixtures where the user is player1 or player2 and not disabled
   const fixtures = await Fixture.find({
     disabled: false,
     $or: [{ player1: userId }, { player2: userId }]
   })
   .populate('player1', 'name')
   .populate('player2', 'name')
-  .populate('tournament', 'type balance') // fetch tournament info
-  .sort({ round: 1, matchTime: 1 }); // order by round then time
+  .populate('tournament', 'type balance')
+  .sort({ round: 1, matchTime: 1 });
 
-  // Format fixtures
   return fixtures.map(f => {
     const p1 = f.player1 ? f.player1.name : 'TBD';
     const p2 = f.player2 ? f.player2.name : 'TBD';
@@ -106,14 +103,18 @@ async function getUserFixtures(userId) {
   });
 }
 
-
 // ----- Welcome -----
+const fs = require("fs");
+
 function sendWelcomeImage(chatId) {
-  const imagePath = path.join(__dirname, 'IMG.JPG');
-  bot.sendPhoto(chatId, imagePath, {
-    caption: '🎉 Welcome to the Tournament Bot!',
-    reply_markup: { inline_keyboard: mainMenuButtons(chatId) }
-  }).catch(console.error);
+const imagePath = path.join(__dirname, "IMG.jpg");
+
+const stream = fs.createReadStream(imagePath);
+
+bot.sendPhoto(chatId, stream, {
+caption: "🎉 Welcome to the Tournament Bot!",
+reply_markup: { inline_keyboard: mainMenuButtons(chatId) }
+}).catch(console.error);
 }
 
 // ----- Tournament buttons -----
@@ -122,19 +123,6 @@ const tournamentTypeButtons = [
   [{ text: '🥇 Platinum', callback_data: 'type_Platinum' }],
   [{ text: '⬅️ Back to Menu', callback_data: 'back_to_main' }]
 ];
-
-const balanceButtons = [
-  { amount: 50, emoji: '💰' },
-  { amount: 100, emoji: '💎' },
-  { amount: 200, emoji: '👑' }
-];
-
-// Max players by type
-const maxPlayersByType = {
-  Silver: 8,
-  Gold: 32,
-  Platinum: 64
-};
 
 // ----- /start -----
 bot.onText(/\/start/, async (msg) => {
@@ -156,7 +144,68 @@ bot.onText(/\/start/, async (msg) => {
   }
 });
 
+
+// ----- Collect name -----
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const telegramId = msg.from.id;
+
+  // If waiting for name
+  if (waitingForName.has(chatId)) {
+    const name = msg.text.trim();
+    if (!name) return bot.sendMessage(chatId, 'Please send a valid name.');
+
+    // Save name in waiting map
+    waitingForName.delete(chatId);
+    waitingForContact.set(chatId, { name });
+
+    // Ask for phone number
+    return bot.sendMessage(chatId, 'Please send your phone number:', {
+      reply_markup: {
+        keyboard: [[{ text: 'Share Contact', request_contact: true }]],
+        one_time_keyboard: true,
+        resize_keyboard: true
+      }
+    });
+  }
+
+  // If waiting for contact (text input)
+  if (waitingForContact.has(chatId) && msg.contact) {
+    const { name } = waitingForContact.get(chatId);
+    const phone = msg.contact.phone_number;
+
+    // Save user to DB
+    try {
+      const existingUser = await User.findOne({ telegram_id: telegramId });
+      if (!existingUser) {
+        const newUser = await User.create({
+          telegram_id: telegramId,
+          telegram_username: msg.from.username,
+          name,
+          phone_number: phone,
+          balance: 0
+        });
+        userCache.set(chatId, newUser);
+      }
+      waitingForContact.delete(chatId);
+
+      // Send welcome image + main menu
+      sendWelcomeImage(chatId);
+    } catch (err) {
+      console.error('Error saving user:', err);
+      bot.sendMessage(chatId, '⚠️ Could not save your info. Please try again.');
+    }
+  }
+});
+
+
 // ----- Collect name and contact -----
+
+
+// At the very top of bot.js
+// At the very top of bot.js
+
+
 bot.on('callback_query', async (callbackQuery) => {
   const msg = callbackQuery.message;
   const chatId = msg.chat.id;
@@ -178,7 +227,9 @@ bot.on('callback_query', async (callbackQuery) => {
     switch (true) {
       case data === 'my_info': {
         if (!user) return requireRegistration();
-        return editMessage(chatId, messageId,
+        return editMessage(
+          chatId,
+          messageId,
           `Your Info:\n\nName: ${user.name}\nTelegram: @${user.telegram_username || 'N/A'}\nPhone: ${user.phone_number}`,
           [[{ text: '⬅️ Back', callback_data: 'back_to_main' }]]
         );
@@ -191,80 +242,90 @@ bot.on('callback_query', async (callbackQuery) => {
         if (!user) return requireRegistration();
         const selectedType = data.split('_')[1];
         waitingForTournamentType.set(chatId, selectedType);
-        const buttons = balanceButtons.map(b => ([{ text: `${b.emoji} ${b.amount} Birr`, callback_data: `balance_${b.amount}` }]));
+
+        const amountMap = { Silver: 50, Gold: 100, Platinum: 200 };
+        const selectedAmount = amountMap[selectedType];
+
+        const buttons = [
+          [{ text: `✅ Register for ${selectedAmount} Birr`, callback_data: `register_${selectedType}` }],
+        ];
         buttons.push([{ text: '⬅️ Back to Types', callback_data: 'back_to_type' }]);
-        return editMessage(chatId, messageId, '💵 *Select Your Balance Option*\n\nChoose how much you want to stake:', buttons);
+
+        return editMessage(
+          chatId,
+          messageId,
+          `💵 You selected ${selectedType} tournament.\n\nClick below to confirm your registration:`,
+          buttons
+        );
       }
 
-      case data.startsWith('balance_'): {
+      case data.startsWith('register_'): {
         if (!user) return requireRegistration();
+        const selectedType = data.split('_')[1];
 
-        const selectedBalance = Number(data.split('_')[1]);
-        const selectedType = waitingForTournamentType.get(chatId);
-        if (!selectedType) return bot.answerCallbackQuery(callbackQuery.id, { text: 'Select tournament type first.' });
+        const typeDefaults = {
+          Silver: { balance: 50, maxPlayers: 8 },
+          Gold: { balance: 100, maxPlayers: 32 },
+          Platinum: { balance: 200, maxPlayers: 64 },
+        };
 
-        waitingForTournamentType.delete(chatId);
+        const { balance, maxPlayers } = typeDefaults[selectedType];
 
-        // Check if user already registered
-        const alreadyRegistered = await Tournament.findOne({
+        // Try to find an open tournament of this type
+        let tournament = await Tournament.findOne({
           type: selectedType,
-          status: { $in: ['open', 'full'] },
-          players: user._id
-        });
+          status: 'open',
+        }).populate('players');
 
-        if (alreadyRegistered) {
-          return editMessage(chatId, messageId,
-            `⚠️ You are already registered in a ${selectedType} tournament.\nPlease wait until it is finished.`,
-            [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
+        if (tournament) {
+          // Prevent duplicate registration
+          const alreadyRegistered = tournament.players.some(
+            (p) => p._id.toString() === user._id.toString()
           );
-        }
+          if (alreadyRegistered) {
+            return editMessage(
+              chatId,
+              messageId,
+              `⚠️ You are already registered for the ${selectedType} Tournament!\n\nTournament Code: ${tournament.uniqueId}`,
+              [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
+            );
+          }
 
-        const txRef = `tournament_${user._id}_${Date.now()}`;
-        const SERVER_URL = process.env.NGROK_URL || process.env.SERVER_URL;
-        if (!SERVER_URL) throw new Error('❌ SERVER_URL or NGROK_URL missing in .env');
+          tournament.players.push(user._id);
 
-        try {
-          const response = await axios.post('https://api.chapa.co/v1/transaction/initialize', {
-            amount: selectedBalance,
-            currency: "ETB",
-            tx_ref: txRef,
-            first_name: user.name, // Removed email
-            last_name: '',
-            callback_url: `${SERVER_URL}/chapa/callback`,
-            return_url: `${SERVER_URL}/chapa/return`
-          }, {
-            headers: { Authorization: `Bearer ${process.env.CHAPA_SECRET_KEY}` }
-          });
+          if (tournament.players.length >= tournament.maxPlayers) {
+            tournament.status = 'full';
+          }
 
-          const paymentLink = response.data?.data?.checkout_url;
-          if (!paymentLink) throw new Error('Payment link not received from Chapa.');
-
-          // Save pending tournament
-          await PendingTournament.create({
-            txRef,
-            user: user._id,
+          await tournament.save();
+        } else {
+          // Create new tournament with defaults
+          tournament = new Tournament({
             type: selectedType,
-            balance: selectedBalance,
+            balance,
+            maxPlayers,
+            players: [user._id],
           });
-
-          return editMessage(chatId, messageId,
-            `💳 You selected ${selectedType} tournament with ${selectedBalance} Birr.\n\nClick below to complete your payment:`,
-            [[{ text: '💰 Pay Now', url: paymentLink }]]
-          );
-        } catch (err) {
-          console.error('Chapa payment initialization error:', err.response?.data || err.message);
-          return editMessage(chatId, messageId,
-            '⚠️ Unable to generate payment link. Please try again later.',
-            [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
-          );
+          await tournament.save();
         }
+
+        return editMessage(
+          chatId,
+          messageId,
+          `🎉 You are successfully registered for the ${selectedType} Tournament!\n\n` +
+            `💰 Entry: ${tournament.balance} Birr\n👥 Players: ${tournament.players.length}/${tournament.maxPlayers}\n` +
+            `🏷️ Tournament Code: ${tournament.uniqueId}`,
+          [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
+        );
       }
 
       case data === 'fixture': {
         if (!user) return requireRegistration('fixture');
         const fixtures = await getUserFixtures(user._id);
         if (!fixtures.length) {
-          return editMessage(chatId, messageId,
+          return editMessage(
+            chatId,
+            messageId,
             '⚠️ You have no scheduled fixtures yet.',
             [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
           );
@@ -273,24 +334,29 @@ bot.on('callback_query', async (callbackQuery) => {
         let text = '📅 Your Tournament Fixtures:\n\n';
         fixtures.forEach((f, idx) => {
           text += `${idx + 1}. [${f.tournamentType} | ${f.balance} Birr | Round ${f.round}]\n`;
-          text += `${f.matchText}\nTime: ${f.matchTime}\n`;
+          text += `${f.matchText}\nTime: ${f.matchTime}\n\n`;
         });
 
-        return editMessage(chatId, messageId, text,
-          [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
-        );
+        return editMessage(chatId, messageId, text, [
+          [{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }],
+        ]);
       }
 
       case data === 'rules_privacy': {
         if (!user) return requireRegistration();
         const rulesText = `*🎲 Ethio Dama – Tournament Rules & Regulations*\n\n...`;
-        return editMessage(chatId, messageId, rulesText,
-          [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]
-        );
+        return editMessage(chatId, messageId, rulesText, [
+          [{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }],
+        ]);
       }
 
       case data === 'back_to_main':
-        return editMessage(chatId, messageId, '✨ Main Menu ✨\n\nChoose an option below:', mainMenuButtons(chatId));
+        return editMessage(
+          chatId,
+          messageId,
+          '✨ Main Menu ✨\n\nChoose an option below:',
+          mainMenuButtons(chatId)
+        );
 
       case data === 'back_to_type':
         return editMessage(chatId, messageId, '🎯 *Choose Tournament Type* 🎯', tournamentTypeButtons);
@@ -303,5 +369,6 @@ bot.on('callback_query', async (callbackQuery) => {
     bot.sendMessage(chatId, '⚠️ An error occurred. Please try again.');
   }
 });
+
 
 module.exports = bot;
