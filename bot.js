@@ -101,7 +101,7 @@ async function getUserFixtures(userId) {
   });
 }
 
-<<<<<<< Updated upstream
+
 // ----- Welcome Image -----
 function sendWelcomeImage(chatId) {
   const imagePath = path.join(__dirname, "IMG.jpg");
@@ -114,26 +114,7 @@ function sendWelcomeImage(chatId) {
 }
 
 // ----- Tournament Buttons -----
-=======
 
-// ----- Welcome -----
-const fs = require("fs");
-
-function sendWelcomeImage(chatId) {
-	const imagePath = path.join(__dirname, "IMG.jpg");
-
-	const stream = fs.createReadStream(imagePath);
-
-	bot.sendPhoto(chatId, stream, {
-		caption: "🎉 Welcome to the Tournament Bot!",
-		reply_markup: { inline_keyboard: mainMenuButtons(chatId) }
-	}).catch(console.error);
-}
-
-
-
-// ----- Tournament buttons -----
->>>>>>> Stashed changes
 const tournamentTypeButtons = [
   [{ text: '🥉 Silver', callback_data: 'type_Silver' }, { text: '🥈 Gold', callback_data: 'type_Gold' }],
   [{ text: '🥇 Platinum', callback_data: 'type_Platinum' }],
@@ -159,7 +140,7 @@ bot.onText(/\/start/, async (msg) => {
   }
 });
 
-<<<<<<< Updated upstream
+
 // ----- Collect Name & Contact -----
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
@@ -240,59 +221,7 @@ async function createArifPayPayment(amount, user, selectedType, method = "TELEBI
 
 
 // ----- Callback Queries -----
-=======
 
-bot.on('message', async (msg) => {
-	const chatId = msg.chat.id;
-	const telegramId = msg.from.id;
-
-	if (waitingForName.has(chatId)) {
-		const name = msg.text.trim();
-		if (!name) return bot.sendMessage(chatId, 'Please send a valid name.');
-
-		waitingForName.delete(chatId);
-		waitingForContact.set(chatId, { name });
-
-		return bot.sendMessage(chatId, 'Please send your phone number:', {
-			reply_markup: {
-				keyboard: [[{ text: 'Share Contact', request_contact: true }]],
-				one_time_keyboard: true,
-				resize_keyboard: true
-			}
-		});
-	}
-
-	if (waitingForContact.has(chatId) && msg.contact) {
-		const { name } = waitingForContact.get(chatId);
-		const phone = msg.contact.phone_number;
-
-		try {
-			const existingUser = await User.findOne({ telegram_id: telegramId });
-			if (!existingUser) {
-				const newUser = await User.create({
-					telegram_id: telegramId,
-					telegram_username: msg.from.username,
-					name,
-					phone_number: phone,
-					balance: 0
-				});
-				userCache.set(chatId, newUser);
-			}
-			waitingForContact.delete(chatId);
-
-			sendWelcomeImage(chatId);
-		} catch (err) {
-			console.error('Error saving user:', err);
-			bot.sendMessage(chatId, '⚠️ Could not save your info. Please try again.');
-		}
-	}
-});
-
-
-
-
-// ----- Collect name and contact -----
->>>>>>> Stashed changes
 bot.on('callback_query', async (callbackQuery) => {
   const msg = callbackQuery.message;
   const chatId = msg.chat.id;
