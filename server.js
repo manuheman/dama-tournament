@@ -1,5 +1,5 @@
 const dotenv = require("dotenv");
-
+dotenv.config();
 require('dotenv').config(); // MUST be first
 
 const express = require("express");
@@ -26,7 +26,7 @@ const {
 } = require("./utils/redisClient");
 
 const app = express();
-const PORT = process.env.PORT || 4000; // change from 3000
+const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 const io = new Server(server);
 // ====== Constants ======
@@ -52,7 +52,7 @@ app.use(bodyParser.json());
 app.use(express.json()); // must be BEFORE routes
 app.use(express.static(path.join(__dirname, "public")));
 
-const paymentRoutes = require("./routes/PaymentRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
 
 app.use("/api", paymentRoutes);
 
@@ -63,7 +63,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rr
 global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
   webHook: {
     // URL your Telegram webhook is pointing to
-    port: process.env.PORT || 4000,
+    port: process.env.PORT || 3000,
   }
 });
 
@@ -1356,8 +1356,6 @@ io.on("connection", async (socket) => {
   });
 });
 // Start server
-
-
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
