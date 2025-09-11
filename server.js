@@ -1,5 +1,5 @@
 const dotenv = require("dotenv");
-dotenv.config();
+
 require('dotenv').config(); // MUST be first
 
 const express = require("express");
@@ -26,7 +26,7 @@ const {
 } = require("./utils/redisClient");
 
 const app = express();
-const PORT = process.env.PORT || 3000; // change from 3000
+const PORT = process.env.PORT || 3001; // change from 3000
 const server = http.createServer(app);
 const io = new Server(server);
 // ====== Constants ======
@@ -63,7 +63,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rr
 global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
   webHook: {
     // URL your Telegram webhook is pointing to
-    port: process.env.PORT || 3000,
+    port: process.env.PORT || 3001,
   }
 });
 
