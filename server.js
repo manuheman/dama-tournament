@@ -26,7 +26,7 @@ const {
 } = require("./utils/redisClient");
 
 const app = express();
-const PORT = process.env.PORT || 3001; // change from 3000
+const PORT = process.env.PORT || 4000; // change from 3000
 const server = http.createServer(app);
 const io = new Server(server);
 // ====== Constants ======
@@ -63,7 +63,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rr
 global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
   webHook: {
     // URL your Telegram webhook is pointing to
-    port: process.env.PORT || 3001,
+    port: process.env.PORT || 4000,
   }
 });
 
@@ -1357,5 +1357,5 @@ io.on("connection", async (socket) => {
 });
 // Start server
 
-app.listen(4000, () => console.log("Server running on 4000"));
 
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
