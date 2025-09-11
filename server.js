@@ -26,7 +26,7 @@ const {
 } = require("./utils/redisClient");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001; // change from 3000
 const server = http.createServer(app);
 const io = new Server(server);
 // ====== Constants ======
@@ -1357,5 +1357,5 @@ io.on("connection", async (socket) => {
 });
 // Start server
 
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
 
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
