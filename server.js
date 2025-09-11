@@ -1357,5 +1357,5 @@ io.on("connection", async (socket) => {
 });
 // Start server
 
+app.listen(4000, () => console.log("Server running on 4000"));
 
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
