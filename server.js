@@ -1,5 +1,5 @@
 const dotenv = require("dotenv");
-
+dotenv.config();
 require('dotenv').config(); // MUST be first
 
 const express = require("express");
@@ -12,6 +12,8 @@ const bot = require("./bot");
 const Fixture = require("./models/fixture");  // adjust path as needed
 const User = require('./models/user'); // adjust path as needed
 const Tournament = require('./models/tournament')
+
+
 
 
 // Redis Client and room functions (assumed implemented)
@@ -27,6 +29,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
 const io = new Server(server);
+// ====== Constants ======
+const TURN_TIME = 30; // seconds per turn (adjust as needed)
 
 const TIMER_DURATION = 600; // 10 minutes in seconds
 
@@ -45,19 +49,28 @@ mongoose
 
 // Middleware
 app.use(bodyParser.json());
-app.use('/sounds', express.static(path.join(__dirname, 'sounds')));
+app.use(express.json()); // must be BEFORE routes
 app.use(express.static(path.join(__dirname, "public")));
 
-// Telegram bot webhook
+const paymentRoutes = require("./routes/PaymentRoutes");
+
+app.use("/api", paymentRoutes);
+
 // Telegram bot webhook
 const TelegramBot = require('node-telegram-bot-api');
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || 'YOUR_DEV_TOKEN';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rrpS82yaUZHfbM6QqA7RZMji1d5HIo';
+global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
+  webHook: {
+    // URL your Telegram webhook is pointing to
+    port: process.env.PORT || 3000,
+  }
+});
 
-// Initialize bot **without binding a port**
-global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN);
+console.log('[Telegram Bot Initialized]');
 
-// Tell Telegram where your webhook URL is
+
+
 
 
 app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
@@ -106,6 +119,8 @@ app.use("/api/admin/tournaments", require("./routes/tournaments"));
 app.use("/api/admin/fixtures", require("./routes/fixtures"));
 app.use("/api/user", require("./routes/users"));
 app.use('/api/admin/game-results', require('./routes/game-results'));
+
+
 
 // 404 fallback
 app.use((req, res) => res.status(404).json({ error: "Route not found" }));
@@ -920,151 +935,49 @@ async function startTurnTimer(fixtureId) {
 }
 
 
-//chapa payment integration
-
-
-const PendingTournament = require('./models/PendingTournament');
-
-
-// -------------------------
-// Load environment variables
-// -------------------------
-
-
-const axios = require('axios');
-
-
-// -------------------------
-// Middleware
-// -------------------------
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// -------------------------
-// Base Config
-// -------------------------
-const BASE_URL = process.env.NGROK_URL;
-const CHAPA_SECRET_KEY = process.env.CHAPA_SECRET_KEY;
-
-if (!BASE_URL) throw new Error('❌ NGROK_URL missing in .env');
-if (!CHAPA_SECRET_KEY) throw new Error('❌ CHAPA_SECRET_KEY missing in .env');
-
-console.log('Using Chapa BASE_URL:', BASE_URL);
-
-// -------------------------
-// Initialize Chapa Payment
-// -------------------------
-async function initializeChapaPayment(user, amount = 100, tournamentType, balance, maxPlayers = 4) {
-  if (!user) throw new Error('❌ User object is required');
-
-  const tx_ref = `tournament_${Date.now()}`;
-
-  const chapaData = {
-    amount,
-    currency: 'ETB',
-    tx_ref,
-    first_name: user.name || 'Player',
-    last_name: '',
-    callback_url: `${BASE_URL}/chapa/callback`,
-    return_url: `${BASE_URL}/chapa/return`
-    // Removed email field
-  };
-
-  console.log('Initializing Chapa payment with data:', chapaData);
-
-  const headers = {
-    Authorization: `Bearer ${CHAPA_SECRET_KEY}`,
-    'Content-Type': 'application/json'
-  };
+//arif pay
+app.get("/payment-callback", async (req, res) => {
+  const { chatId, tournamentType, sessionId } = req.query;
 
   try {
-    const response = await axios.post(
-      'https://api.chapa.co/v1/transaction/initialize',
-      chapaData,
-      { headers }
-    );
-    return response.data; // Contains payment link
-  } catch (err) {
-    console.error('Chapa payment initialization error:', err.response?.data || err.message);
-    throw err;
-  }
-}
+    const status = await arifpay.Check_payment_status(sessionId);
 
-// -------------------------
-// Chapa Webhook Callback
-// -------------------------
-app.post('/chapa/callback', async (req, res) => {
-  try {
-    const { tx_ref } = req.body;
-    if (!tx_ref) return res.status(400).send('❌ Missing tx_ref');
+    if (!status.error && status.data.status === "success") {
+      // Payment succeeded, register user
+      const user = await User.findOne({ telegram_id: chatId });
+      const typeDefaults = {
+        Silver: { balance: 50, maxPlayers: 8 },
+        Gold: { balance: 100, maxPlayers: 32 },
+        Platinum: { balance: 200, maxPlayers: 64 },
+      };
+      const { balance, maxPlayers } = typeDefaults[tournamentType];
 
-    // Verify payment with Chapa
-    const verifyRes = await axios.get(`https://api.chapa.co/v1/transaction/verify/${tx_ref}`, {
-      headers: { Authorization: `Bearer ${CHAPA_SECRET_KEY}` }
-    });
+      let tournament = await Tournament.findOne({ type: tournamentType, status: 'open' }).populate('players');
 
-    const data = verifyRes.data?.data;
-    if (!data || data.status !== 'success') {
-      return res.status(400).send('❌ Payment not successful');
-    }
+      if (tournament) {
+        tournament.players.push(user._id);
+        if (tournament.players.length >= tournament.maxPlayers) tournament.status = 'full';
+        await tournament.save();
+      } else {
+        tournament = new Tournament({ type: tournamentType, balance, maxPlayers, players: [user._id] });
+        await tournament.save();
+      }
 
-    // Find pending tournament
-    const pending = await PendingTournament.findOne({ txRef: tx_ref });
-    if (!pending) return res.status(404).send('❌ Pending tournament not found');
-
-    const userId = pending.user;
-
-    // Find or create tournament
-    let tournament = await Tournament.findOne({
-      type: pending.type,
-      balance: pending.balance,
-      status: 'open',
-      $expr: { $lt: [{ $size: "$players" }, pending.maxPlayers || 4] }
-    });
-
-    if (!tournament) {
-      tournament = new Tournament({
-        type: pending.type,
-        balance: pending.balance,
-        players: [],
-        maxPlayers: pending.maxPlayers || 4,
-        status: 'open'
-      });
-    }
-
-    // Add user if not already added
-    if (!tournament.players.includes(userId)) tournament.players.push(userId);
-
-    // Mark tournament full if max reached
-    if (tournament.players.length >= tournament.maxPlayers) tournament.status = 'full';
-
-    await tournament.save();
-    await PendingTournament.deleteOne({ txRef: tx_ref });
-
-    // Notify user on Telegram
-    const user = await User.findById(userId);
-    if (user && user.telegram_id) {
-      bot.sendMessage(
-        user.telegram_id,
-        `✅ Payment confirmed! You are now registered in the ${pending.type} tournament (${pending.balance} Birr).\nCurrent players: ${tournament.players.length}/${tournament.maxPlayers}`
+      // Notify user via bot
+      bot.sendMessage(chatId, `🎉 Payment successful! You are registered for the ${tournamentType} Tournament.\n` +
+        `💰 Entry: ${tournament.balance} Birr\n👥 Players: ${tournament.players.length}/${tournament.maxPlayers}\n` +
+        `🏷️ Tournament Code: ${tournament.uniqueId}`
       );
-    }
 
-    res.status(200).send('✅ Payment verified and tournament registration completed');
+      res.send("Payment confirmed and registration complete!");
+    } else {
+      res.send("Payment is pending or failed.");
+    }
   } catch (err) {
-    console.error('Chapa webhook error:', err.response?.data || err.message);
-    res.status(500).send('⚠️ Internal Server Error');
+    console.error("Payment callback error:", err);
+    res.status(500).send("Error verifying payment");
   }
 });
-
-// -------------------------
-// Browser Return URL
-// -------------------------
-app.get('/chapa/return', (req, res) => {
-  res.send('<h2>✅ Payment completed! You can return to Telegram now.</h2>');
-});
-
-module.exports = { app, initializeChapaPayment };
 
 // --- SOCKET.IO CONNECTION ---
 // Socket connection handler
@@ -1443,31 +1356,6 @@ io.on("connection", async (socket) => {
   });
 });
 // Start server
-server.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
-});
 
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/*
-node_modules/ 
-*.log 
-.DS_Store 
-Thumbs.db 
-.env
-
-*/
