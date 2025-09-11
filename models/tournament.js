@@ -5,7 +5,7 @@ function generateUniqueId() {
   return 'TOUR-' + Math.random().toString(36).substr(2, 8).toUpperCase();
 }
 
-// Map default balances and maxPlayers per type
+// Default balances and maxPlayers per type
 const TournamentDefaults = {
   Silver: { balance: 50, maxPlayers: 8 },
   Gold: { balance: 100, maxPlayers: 32 },
@@ -35,7 +35,10 @@ const TournamentSchema = new mongoose.Schema({
     enum: ['open', 'full', 'finished'],
     default: 'open',
   },
-  fixtures: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Fixture' }],
+  fixtures: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Fixture'
+  }],
   uniqueId: {
     type: String,
     unique: true,
@@ -47,31 +50,40 @@ const TournamentSchema = new mongoose.Schema({
   }
 });
 
-// Pre-save middleware to set defaults and generate uniqueId
-TournamentSchema.pre('save', async function (next) {
-  // Set default balance and maxPlayers if not set
-  if (!this.balance || !this.maxPlayers) {
-    const defaults = TournamentDefaults[this.type];
-    if (defaults) {
-      if (!this.balance) this.balance = defaults.balance;
-      if (!this.maxPlayers) this.maxPlayers = defaults.maxPlayers;
-    }
+// Pre-validate middleware to set defaults
+TournamentSchema.pre('validate', function(next) {
+  const defaults = TournamentDefaults[this.type];
+  if (defaults) {
+    if (!this.balance) this.balance = defaults.balance;
+    if (!this.maxPlayers) this.maxPlayers = defaults.maxPlayers;
   }
+  next();
+});
 
-  // Generate uniqueId if not set
+// Pre-save middleware to generate uniqueId
+TournamentSchema.pre('save', async function(next) {
   if (!this.uniqueId) {
     let newId;
     let exists = true;
-
     while (exists) {
       newId = generateUniqueId();
       exists = await mongoose.models.Tournament.exists({ uniqueId: newId });
     }
-
     this.uniqueId = newId;
   }
-
   next();
 });
+
+// Add a player safely
+TournamentSchema.methods.addPlayer = async function(userId) {
+  if (!this.players.includes(userId) && this.players.length < this.maxPlayers) {
+    this.players.push(userId);
+    // Update status if full
+    if (this.players.length >= this.maxPlayers) this.status = 'full';
+    await this.save();
+    return true;
+  }
+  return false;
+};
 
 module.exports = mongoose.model('Tournament', TournamentSchema);

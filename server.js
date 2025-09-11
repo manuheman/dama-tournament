@@ -1448,3 +1448,26 @@ server.listen(PORT, () => {
 });
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/*
+node_modules/ 
+*.log 
+.DS_Store 
+Thumbs.db 
+.env
+
+*/
