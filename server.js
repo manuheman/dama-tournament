@@ -1358,4 +1358,7 @@ io.on("connection", async (socket) => {
 // Start server
 
 
-app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
