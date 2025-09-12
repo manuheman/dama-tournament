@@ -101,7 +101,6 @@ async function getUserFixtures(userId) {
   });
 }
 
-
 // ----- Welcome Image -----
 function sendWelcomeImage(chatId) {
   const imagePath = path.join(__dirname, "IMG.jpg");
@@ -114,7 +113,6 @@ function sendWelcomeImage(chatId) {
 }
 
 // ----- Tournament Buttons -----
-
 const tournamentTypeButtons = [
   [{ text: '🥉 Silver', callback_data: 'type_Silver' }, { text: '🥈 Gold', callback_data: 'type_Gold' }],
   [{ text: '🥇 Platinum', callback_data: 'type_Platinum' }],
@@ -139,7 +137,6 @@ bot.onText(/\/start/, async (msg) => {
     bot.sendMessage(chatId, '⚠️ Something went wrong, please try again.');
   }
 });
-
 
 // ----- Collect Name & Contact -----
 bot.on('message', async (msg) => {
@@ -221,7 +218,6 @@ async function createArifPayPayment(amount, user, selectedType, method = "TELEBI
 
 
 // ----- Callback Queries -----
-
 bot.on('callback_query', async (callbackQuery) => {
   const msg = callbackQuery.message;
   const chatId = msg.chat.id;
@@ -329,8 +325,6 @@ bot.on('callback_query', async (callbackQuery) => {
     bot.sendMessage(chatId, '⚠️ An error occurred. Please try again.');
   }
 });
-
-
 
 
 module.exports = bot;

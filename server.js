@@ -1,5 +1,5 @@
-const dotenv = require("dotenv");
-dotenv.config();
+
+
 require('dotenv').config(); // MUST be first
 
 const express = require("express");
@@ -26,11 +26,11 @@ const {
 } = require("./utils/redisClient");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 4000; // change from 3000
 const server = http.createServer(app);
 const io = new Server(server);
 // ====== Constants ======
-const TURN_TIME = 30; // seconds per turn (adjust as needed)
+
 
 const TIMER_DURATION = 600; // 10 minutes in seconds
 
@@ -52,27 +52,55 @@ app.use(bodyParser.json());
 app.use(express.json()); // must be BEFORE routes
 app.use(express.static(path.join(__dirname, "public")));
 
-const paymentRoutes = require("./routes/paymentRoutes");
+const paymentRoutes = require("./routes/PaymentRoutes");
 
 app.use("/api", paymentRoutes);
 
 // Telegram bot webhook
-const TelegramBot = require('node-telegram-bot-api');
+;
 
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rrpS82yaUZHfbM6QqA7RZMji1d5HIo';
-global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, {
-  webHook: {
-    // URL your Telegram webhook is pointing to
-    port: process.env.PORT || 3000,
+const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
+
+// ✅ Load token & ngrok url from env
+const TELEGRAM_BOT_TOKEN =
+  process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rrpS82yaUZHfbM6QqA7RZMji1d5HIo';
+const NGROK_URL =
+  process.env.NGROK_URL || 'https://20a4bcbca83d.ngrok-free.app';
+
+// ✅ Initialize bot (Express will handle requests)
+global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { webHook: true });
+
+// ✅ Function to set webhook only once
+async function initWebhook() {
+  try {
+    const url = `${NGROK_URL}/bot${TELEGRAM_BOT_TOKEN}`;
+
+    // check existing webhook
+    const res = await axios.get(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`
+    );
+
+    if (res.data.result.url !== url) {
+      // set webhook if not already set
+      await axios.post(
+        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`,
+        { url }
+      );
+      console.log(`[Webhook] Set to: ${url}`);
+    } else {
+      console.log(`[Webhook] Already set to: ${url}`);
+    }
+  } catch (err) {
+    console.error('[Webhook] Error setting webhook:', err.response?.data || err.message);
   }
-});
+}
+
+initWebhook();
 
 console.log('[Telegram Bot Initialized]');
 
-
-
-
-
+// ✅ Webhook endpoint for Telegram
 app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -834,6 +862,8 @@ module.exports = { checkAutoWin, FIVE_MINUTES, rooms };
 
 
 // --------------------- Redis helpers ---------------------
+const TURN_TIME = 30; // 30 seconds per turn
+
 async function getTurnTimer(fixtureId) {
   const val = await redisClient.get(`game:${fixtureId}:turnTimer`);
   return val !== null ? parseInt(val, 10) : null;
@@ -1358,5 +1388,5 @@ io.on("connection", async (socket) => {
 // Start server
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
