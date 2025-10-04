@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dama Dashboard V1</title>
+  <link rel="stylesheet" href="style.css"> <!-- Ensure your CSS path is correct -->
+</head>
+<body>
+  <div class="container">
+    <!-- User Info -->
+    <div class="user-info">
+      <div>
+        <h2>Welcome, <span id="name">User</span></h2>
+        
+        <p>Balance: <span id="balance">0</span> birr</p>
+      </div>
+      
+    </div>
+
+    <!-- Create Room -->
+    <div class="create-room">
+      <h3>Create Game Room</h3>
+      <input id="betAmount" type="number" placeholder="Enter Bet Amount">
+      <button id="createRoomBtn">Create Room</button>
+    </div>
+
+    <!-- Available Rooms -->
+    <div class="available-rooms">
+      <h3>Available Rooms</h3>
+      <ul id="roomsList"></ul>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="dashboard.js"></script> <!-- Ensure path matches your public folder -->
+</body>
+</html>

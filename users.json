@@ -1,0 +1,42 @@
+{
+    "483705027": {
+        "referredBy": "1351052276",
+        "state": "done",
+        "name": "Jkl",
+        "phone": "251920227084",
+        "username": "kasia2222",
+        "id": 483705027,
+        "imageMessageId": 899
+    },
+    "1351052276": {
+        "referredBy": "5745996214",
+        "state": "done",
+        "name": "Manu",
+        "phone": "251927084146",
+        "username": "Yeabweld",
+        "id": 1351052276,
+        "imageMessageId": 901,
+        "invited": [
+            483705027
+        ]
+    },
+    "7236781446": {
+        "state": "done",
+        "name": "Gj",
+        "phone": "251717829972",
+        "username": "lubi2ryu",
+        "id": 7236781446,
+        "imageMessageId": 592
+    },
+    "5745996214": {
+        "state": "done",
+        "name": "Gel",
+        "phone": "251914829972",
+        "username": "ServantOfChrist90",
+        "id": 5745996214,
+        "imageMessageId": 883,
+        "invited": [
+            1351052276
+        ]
+    }
+}

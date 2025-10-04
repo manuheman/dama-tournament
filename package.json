@@ -17,6 +17,7 @@
     "express": "^5.1.0",
     "ioredis": "^5.7.0",
     "mongoose": "^8.16.1",
+    "node-fetch": "^3.3.2",
     "node-telegram-bot-api": "^0.66.0",
     "redis": "^5.6.1",
     "socket.io": "^4.8.1",

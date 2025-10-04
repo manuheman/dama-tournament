@@ -760,3 +760,67 @@ socket.on("turn-swapped", (data) => {
     messageElement.textContent = "Opponent's turn. Please wait...";
   }
 });
+
+
+
+// === SOCKET.IO EVENTS ===
+
+// Connected
+socket.on("connect", () => {
+  console.log("✅ Connected to dama namespace");
+  showWaitingOverlay(); // show waiting until room/game starts
+});
+
+// Lobby / Rooms
+socket.on("update-rooms", (rooms) => {
+  console.log("📋 Updated rooms:", rooms);
+  renderRoomsList(rooms); // your existing function
+});
+
+// Room ready (assigned player number)
+socket.on("room-ready", ({ playerNumber, roomId }) => {
+  console.log(`🎮 Room ready! You are Player ${playerNumber}, room: ${roomId}`);
+  myPlayerNumber = playerNumber;
+  currentPlayer = 1; // Player 1 starts
+  boardEnabled = myPlayerNumber === currentPlayer;
+  setBoardState(initializeBoardState());
+  hideWaitingOverlay();
+  playGameStartSound();
+});
+
+// Game start
+socket.on("start-game", ({ roomId, players }) => {
+  console.log("🚀 Game starting!", roomId, players);
+  boardEnabled = myPlayerNumber === currentPlayer;
+  hideWaitingOverlay();
+  playGameStartSound();
+});
+
+// Opponent left
+socket.on("opponent-left", ({ roomId }) => {
+  console.log("⚠️ Opponent left room", roomId);
+  boardEnabled = false;
+  showWaitingOverlay();
+  const msgEl = document.getElementById("waiting-message");
+  if (msgEl) msgEl.textContent = "Opponent left the game. Waiting for a new player...";
+});
+
+// Error from server
+socket.on("error", (err) => {
+  console.error("Socket error:", err);
+  alert(err);
+});
+
+// Disconnect
+socket.on("disconnect", () => {
+  console.log("❌ Disconnected from server");
+  boardEnabled = false;
+  showWaitingOverlay();
+  const msgEl = document.getElementById("waiting-message");
+  if (msgEl) msgEl.textContent = "Disconnected from server. Reconnecting...";
+});
+
+// Emit a move when player moves
+function emitMove(move) {
+  socket.emit("make-move", move);
+}

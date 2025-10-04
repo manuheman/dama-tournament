@@ -6,7 +6,7 @@
   <link rel="stylesheet" href="admin.css" />
  
   <style>
-    /* Basic styles for modal - optional */
+    /* Basic styles for modal */
     #modalOverlay {
       display: none;
       position: fixed;
@@ -26,18 +26,19 @@
       z-index: 1001;
       min-width: 300px;
     }
+    button {
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <nav>
       <a href="admin-win.html" class="active">Wins</a>
-     <a href="/admin-user.html">Users</a>
-    <a href="/admin-tournament.html">Tournaments</a>
-    <a href="/admin-fixture.html">Fixture</a>
-    <a href="/admin-fixture-generated.html">Generated Fixtures</a>
-      <!-- add more nav links as needed -->
-    </nav>
-
+      <a href="/admin-user.html">Users</a>
+      <a href="/admin-tournament.html">Tournaments</a>
+      <a href="/admin-fixture.html">Fixture</a>
+      <a href="/admin-fixture-generated.html">Generated Fixtures</a>
+  </nav>
 
   <h1>All Generated Fixtures</h1>
   <table id="fixtures-table" border="1" cellspacing="0" cellpadding="6" style="width:100%; border-collapse: collapse;">
@@ -51,13 +52,16 @@
         <th>Actions</th>
       </tr>
     </thead>
-    <tbody></tbody>
+    <tbody id="fixturesBody">
+      <!-- Tournament rows will be dynamically generated in external JS -->
+      <!-- Each row will have a "Set Match Time" button for the whole tournament -->
+    </tbody>
   </table>
 
-  <!-- Optional Modal for editing match time (not implemented in JS currently) -->
+  <!-- Modal for editing match time -->
   <div id="modalOverlay"></div>
   <div id="editModal">
-    <h3>Edit Match Time</h3>
+    <h3>Set Tournament Match Time</h3>
     <input type="datetime-local" id="matchTimeInput" />
     <br /><br />
     <button id="saveBtn">Save</button>

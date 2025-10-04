@@ -1,0 +1,242 @@
+/* =========================
+   Base Reset
+========================= */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Poppins', sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: linear-gradient(135deg, #6a11cb, #2575fc);
+  color: #333;
+  padding: 50px 20px;
+  transition: background 0.5s ease;
+}
+
+/* =========================
+   Container Card
+========================= */
+.container {
+  max-width: 950px;
+  width: 100%;
+  background-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  border-radius: 25px;
+  box-shadow: 0 25px 50px rgba(0,0,0,0.2);
+  padding: 50px 50px;
+  display: flex;
+  flex-direction: column;
+  gap: 45px;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.container:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 30px 60px rgba(0,0,0,0.25);
+}
+
+/* =========================
+   User Info
+========================= */
+.user-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(240, 244, 248, 0.8);
+  padding: 30px 35px;
+  border-radius: 20px;
+  box-shadow: inset 0 5px 15px rgba(0,0,0,0.05);
+  transition: background 0.3s ease;
+}
+
+.user-info:hover {
+  background: rgba(240, 244, 248, 1);
+}
+
+.user-info h2 {
+  font-size: 2rem;
+  color: #1f2937;
+}
+
+.user-info p {
+  font-size: 1.2rem;
+  color: #4b5563;
+  margin-top: 6px;
+}
+
+#logoutBtn {
+  padding: 12px 25px;
+  border-radius: 15px;
+  border: none;
+  background: #ef4444;
+  color: #fff;
+  font-weight: bold;
+  cursor: pointer;
+  box-shadow: 0 8px 25px rgba(239, 68, 68, 0.4);
+  transition: all 0.3s ease;
+}
+
+#logoutBtn:hover {
+  background: #dc2626;
+  transform: translateY(-3px);
+}
+
+/* =========================
+   Create Room Section
+========================= */
+.create-room {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.create-room h3 {
+  color: #111827;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+#createRoomBtn {
+  padding: 14px 0;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #fff;
+  border: none;
+  border-radius: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 1.1rem;
+  box-shadow: 0 10px 25px rgba(16, 185, 129, 0.4);
+  transition: all 0.3s ease;
+}
+
+#createRoomBtn:hover {
+  background: linear-gradient(135deg, #059669, #047857);
+  transform: translateY(-3px);
+}
+
+input#betAmount {
+  padding: 14px 18px;
+  border-radius: 18px;
+  border: 1px solid #d1d5db;
+  font-size: 1.05rem;
+  transition: all 0.3s ease;
+}
+
+input#betAmount:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+  outline: none;
+}
+
+/* =========================
+   Available Rooms
+========================= */
+.available-rooms h3 {
+  color: #111827;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.available-rooms ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.available-rooms li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(249, 250, 251, 0.9);
+  padding: 18px 28px;
+  border-radius: 20px;
+  box-shadow: 0 12px 25px rgba(0,0,0,0.08);
+  transition: all 0.3s ease;
+}
+
+.available-rooms li:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 18px 40px rgba(0,0,0,0.12);
+}
+
+.available-rooms button {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.35);
+}
+
+.available-rooms button:hover {
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  transform: translateY(-3px);
+}
+
+/* =========================
+   Responsive
+========================= */
+@media (max-width: 900px) {
+  .container {
+    padding: 35px 30px;
+    gap: 35px;
+  }
+
+  .user-info {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .available-rooms li {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .available-rooms button {
+    align-self: flex-end;
+  }
+}
+
+@media (max-width: 600px) {
+  .container {
+    padding: 25px 20px;
+    gap: 30px;
+  }
+
+  .create-room input,
+  .create-room button {
+    width: 100%;
+  }
+
+  .user-info h2 {
+    font-size: 1.6rem;
+  }
+
+  .user-info p {
+    font-size: 1.05rem;
+  }
+}
+
+/* =========================
+   Extra Glow Effects
+========================= */
+#createRoomBtn, .available-rooms button, #logoutBtn {
+  transition: all 0.3s ease, box-shadow 0.3s ease;
+}
+
+#createRoomBtn:hover, .available-rooms button:hover, #logoutBtn:hover {
+  box-shadow: 0 12px 35px rgba(59,130,246,0.4);
+}
+

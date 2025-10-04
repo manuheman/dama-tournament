@@ -1,6 +1,10 @@
-
-
+const dotenv = require("dotenv");
+dotenv.config();
 require('dotenv').config(); // MUST be first
+
+const crypto = require ('crypto');
+const CHAPA_API_KEY = process.env.CHAPA_API_KEY
+
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -12,9 +16,11 @@ const bot = require("./bot");
 const Fixture = require("./models/fixture");  // adjust path as needed
 const User = require('./models/user'); // adjust path as needed
 const Tournament = require('./models/tournament')
+const Withdraw = require('./models/withdraw'); // adjust path if needed
+const paymentRoutes = require('./routes/PaymentRoutes');
+const PORT = process.env.PORT || 3000;
 
-
-
+const redisHelper = require('./utils/redisHelper');
 
 // Redis Client and room functions (assumed implemented)
 const {
@@ -23,14 +29,31 @@ const {
   getRoom,
   updateRoom,
   deleteRoom,
+
 } = require("./utils/redisClient");
 
+
+const {
+
+
+  createOrJoinRoomDama1V1,
+  getRoomDama1V1,
+  updateRoomDama1V1,
+  deleteRoomDama1V1,
+  leaveRoomDama1V1,
+  getAllRoomsDama1V1,
+  saveGameState,
+  getGameState,
+  applyMove,
+  getValidMoves,
+  initializeBoard
+} = require('./utils/redisHelper'); // <-- check this path!
+
 const app = express();
-const PORT = process.env.PORT || 4000; // change from 3000
 const server = http.createServer(app);
 const io = new Server(server);
 // ====== Constants ======
-
+const TURN_TIME = 30; // seconds per turn (adjust as needed)
 
 const TIMER_DURATION = 600; // 10 minutes in seconds
 
@@ -52,12 +75,10 @@ app.use(bodyParser.json());
 app.use(express.json()); // must be BEFORE routes
 app.use(express.static(path.join(__dirname, "public")));
 
-const paymentRoutes = require("./routes/PaymentRoutes");
 
 app.use("/api", paymentRoutes);
 
 // Telegram bot webhook
-;
 
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
@@ -66,8 +87,7 @@ const axios = require('axios');
 const TELEGRAM_BOT_TOKEN =
   process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rrpS82yaUZHfbM6QqA7RZMji1d5HIo';
 const NGROK_URL =
-  process.env.NGROK_URL || 'https://20a4bcbca83d.ngrok-free.app';
-
+  process.env.NGROK_URL || 'https://36a805478122.ngrok-free.app';
 // ✅ Initialize bot (Express will handle requests)
 global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { webHook: true });
 
@@ -106,7 +126,22 @@ app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
   res.sendStatus(200);
 });
 
+
+// Parse raw body for signature verification
+app.use('/webhook', express.raw({ type: 'application/json' }));
+
+// Your Chapa secret for webhook verification
+const CHAPA_WEBHOOK_SECRET = process.env.CHAPA_WEBHOOK_SECRET;
+
+// Chapa secret for approval
+
+
+
+
+
 // Root route
+const oneVsOneUserRouter = require('./routes/1v1user');
+app.use('/1v1user', oneVsOneUserRouter);
 app.get("/", (req, res) => res.send("✅ Node.js Server is running"));
 
 // Static admin routes
@@ -751,24 +786,25 @@ const rooms = {}; // in-memory room cache
  * Check and apply auto-win for a given fixture
  * @param {String} fixtureId
  */
+function emitToRoom(room, event, payload) {
+  room.players.forEach(p => p.socket?.emit(event, payload));
+}
+
+
+
+/**
+ * Check and apply auto-win for a fixture
+ * @param {String} fixtureId
+ */
 async function checkAutoWin(fixtureId) {
   try {
-    const fixture = await Fixture.findById(fixtureId);
-    if (!fixture) {
-      console.log(`[Auto Win] Fixture ${fixtureId} not found.`);
-      return;
-    }
+    const fixture = await Fixture.findById(fixtureId).lean();
+    if (!fixture) return console.log(`[Auto Win] Fixture ${fixtureId} not found.`);
 
     const { matchTime, player1, player2 } = fixture;
-    if (!matchTime) {
-      console.log(`[Auto Win] Fixture ${fixtureId} has no matchTime set yet.`);
-      return;
-    }
+    if (!matchTime) return console.log(`[Auto Win] Fixture ${fixtureId} has no matchTime.`);
 
-    const now = new Date();
     const room = rooms[fixtureId];
-
-    // Get connected player IDs from sockets
     const connectedPlayers = room
       ? room.players.filter(p => p.socket).map(p => p.userId)
       : [];
@@ -776,77 +812,78 @@ async function checkAutoWin(fixtureId) {
     // Skip auto-win if both players are connected
     if (
       connectedPlayers.length === 2 ||
-      (player2 &&
-        connectedPlayers.includes(player1.toString()) &&
-        connectedPlayers.includes(player2.toString()))
+      (player2 && connectedPlayers.includes(player1.toString()) && connectedPlayers.includes(player2.toString()))
     ) {
-      console.log(`[Auto Win] Both players have joined. Skipping auto-win.`);
-      return;
+      return console.log(`[Auto Win] Both players have joined. Skipping auto-win.`);
     }
 
-    // Calculate elapsed time
-    const elapsed = now.getTime() - matchTime.getTime();
+    // Check elapsed time
+    const elapsed = new Date().getTime() - new Date(matchTime).getTime();
     if (elapsed < FIVE_MINUTES) {
       const waitTime = FIVE_MINUTES - elapsed;
-      console.log(`[Auto Win] 5 minutes not reached yet. Waiting ${waitTime / 1000}s...`);
-      setTimeout(() => checkAutoWin(fixtureId), waitTime);
+      console.log(`[Auto Win] Waiting ${Math.ceil(waitTime / 1000)}s before auto-win...`);
+      // Use a single scheduled check per fixture
+      if (room) {
+        clearTimeout(room.autoWinTimeout);
+        room.autoWinTimeout = setTimeout(() => checkAutoWin(fixtureId), waitTime);
+      } else {
+        setTimeout(() => checkAutoWin(fixtureId), waitTime);
+      }
       return;
     }
 
-    console.log(`[Auto Win] 5 minutes passed since matchTime.`);
-
+    // Determine winner
     let winnerObjectId;
-
     if (connectedPlayers.length === 1) {
-      // Only one player joined → they win
-      const winnerUser = await User.findOne({ telegram_id: connectedPlayers[0] });
-      if (!winnerUser) {
-        console.error(`[Auto Win] Connected player not found: ${connectedPlayers[0]}`);
-        return;
-      }
+      const winnerUser = await User.findOne({ telegram_id: connectedPlayers[0] }).lean();
+      if (!winnerUser) return console.error(`[Auto Win] Player not found: ${connectedPlayers[0]}`);
       winnerObjectId = winnerUser._id;
-      console.log(`[Auto Win] Only one player joined. Winner ObjectId: ${winnerObjectId}`);
-    } else if (connectedPlayers.length === 0) {
-      // Neither joined → pick random winner
+      console.log(`[Auto Win] Only one player joined. Winner: ${winnerObjectId}`);
+    } else {
+      // No players joined → random winner
       const players = [player1, player2].filter(Boolean);
       winnerObjectId = players[Math.floor(Math.random() * players.length)];
-      console.log(`[Auto Win] No players joined. Random winner ObjectId: ${winnerObjectId}`);
+      console.log(`[Auto Win] No players joined. Random winner: ${winnerObjectId}`);
     }
 
-    // Determine winner/loser numbers
-    const winnerNumber = fixture.player1.equals(winnerObjectId) ? 1 : 2;
+    const winnerNumber = fixture.player1.toString() === winnerObjectId.toString() ? 1 : 2;
     const loserNumber = winnerNumber === 1 ? 2 : 1;
     const loserObjectId = loserNumber === 1 ? fixture.player1 : fixture.player2;
 
-    // Update fixture
-    fixture.result = winnerNumber;
-    fixture.status = "completed";
-    await fixture.save();
-    if (room) room.status = "completed";
+    // Update fixture in DB
+    await Fixture.findByIdAndUpdate(fixtureId, {
+      result: winnerNumber,
+      status: 'completed',
+    });
 
-    // Notify players via sockets
+    // Update in-memory room
+    if (room) room.status = 'completed';
+
+    // Notify via sockets
     if (room) {
-      const winnerSocket = room.players.find(p => p.userId === winnerObjectId?.toString())?.socket;
-      const loserSocket = room.players.find(p => p.userId === loserObjectId?.toString())?.socket;
+      const winnerSocket = room.players.find(p => p.userId === winnerObjectId.toString())?.socket;
+      const loserSocket = room.players.find(p => p.userId === loserObjectId.toString())?.socket;
 
-      if (winnerSocket) winnerSocket.emit("game-over", { message: "🎉 You win! Auto-win applied." });
-      if (loserSocket) loserSocket.emit("game-over", { message: "😞 You lost. Auto-win applied." });
+      if (winnerSocket) winnerSocket.emit('game-over', { message: '🎉 You win! Auto-win applied.' });
+      if (loserSocket) loserSocket.emit('game-over', { message: '😞 You lost. Auto-win applied.' });
     }
 
-    // ✅ Notify players via Telegram
-    const winnerUser = await User.findById(winnerObjectId).lean();
-    const loserUser = await User.findById(loserObjectId).lean();
+    // Notify via Telegram
+    const [winnerUser, loserUser] = await Promise.all([
+      User.findById(winnerObjectId).lean(),
+      User.findById(loserObjectId).lean(),
+    ]);
 
     if (winnerUser?.telegram_id) {
-      sendTelegramMessage(winnerUser.telegram_id, `🎉 Auto-Win! You won the match for fixture ${fixture._id}.`);
+      sendTelegramMessage(winnerUser.telegram_id, `🎉 Auto-Win! You won the match for fixture ${fixtureId}.`);
     }
     if (loserUser?.telegram_id) {
-      sendTelegramMessage(loserUser.telegram_id, `😞 Auto-Win applied! You lost the match for fixture ${fixture._id}.`);
+      sendTelegramMessage(loserUser.telegram_id, `😞 Auto-Win applied! You lost the match for fixture ${fixtureId}.`);
     }
 
-    console.log(`[Auto Win] Fixture ${fixtureId} completed. Winner ObjectId: ${winnerObjectId}`);
+    console.log(`[Auto Win] Fixture ${fixtureId} completed. Winner: ${winnerObjectId}`);
   } catch (err) {
-    console.error("[Error in checkAutoWin]:", err);
+    console.error('[Error in checkAutoWin]:', err);
   }
 }
 
@@ -855,15 +892,12 @@ global.checkAutoWin = checkAutoWin;
 global.FIVE_MINUTES = FIVE_MINUTES;
 global.rooms = rooms;
 
-console.log('[Auto Win Module] checkAutoWin loaded and attached to global scope.');
+console.log('[Auto Win Module] checkAutoWin loaded.');
 
 module.exports = { checkAutoWin, FIVE_MINUTES, rooms };
 
 
-
 // --------------------- Redis helpers ---------------------
-const TURN_TIME = 30; // 30 seconds per turn
-
 async function getTurnTimer(fixtureId) {
   const val = await redisClient.get(`game:${fixtureId}:turnTimer`);
   return val !== null ? parseInt(val, 10) : null;
@@ -1008,6 +1042,122 @@ app.get("/payment-callback", async (req, res) => {
     res.status(500).send("Error verifying payment");
   }
 });
+
+
+
+
+async function createChapaPayment(amount, user, phone) {
+  const payload = {
+    amount: amount,
+    currency: 'ETB',
+    email: user.email || 'guest@example.com',
+    first_name: user.name,
+    last_name: '',
+    tx_ref: `1v1-${user.telegram_id}-${Date.now()}`,
+    phone_number: phone,
+    callback_url: `${NGROK_URL}/api/chapa-callback?chatId=${user.telegram_id}&amount=${amount}`
+  };
+
+  const response = await axios.post('https://api.chapa.co/v1/transaction/initialize', payload, {
+    headers: { Authorization: `Bearer ${CHAPA_API_KEY}` }
+  });
+
+  return response.data.data.checkout_url; // Chapa checkout URL
+}
+app.post('/api/chapa-callback', async (req, res) => {
+  const { chatId, amount } = req.query;
+  const { status, tx_ref } = req.body; // depends on Chapa response
+
+  if (status === 'success') {
+    const user = await User.findOne({ telegram_id: chatId });
+    if (user) {
+      user.oneVsOne_balance = (user.oneVsOne_balance || 0) + Number(amount);
+      await user.save();
+      bot.sendMessage(chatId, `✅ Payment successful! Your new 1v1 balance is ${user.oneVsOne_balance} Birr`);
+    }
+  } else {
+    bot.sendMessage(chatId, `❌ Payment failed. Please try again.`);
+  }
+
+  res.sendStatus(200);
+});
+
+
+
+
+
+// --- /api/withdraw with webhook-based status ---
+app.post('/api/withdraw', express.json(), async (req, res) => {
+  console.log('--- [API] /api/withdraw request received ---');
+  console.log('[API] Request body:', req.body);
+
+  const { name, phone, amount, account_number, bank_code, tx_ref, chatId } = req.body;
+
+  // 1️⃣ Save withdrawal in DB (status: pending)
+  let withdrawal;
+  try {
+    withdrawal = await Withdraw.create({
+      userId: null, // optional if linked to DB user
+      name,
+      phone,
+      amount,
+      account_number,
+      bank_code,
+      tx_ref,
+      chatId,
+      status: 'pending', // Always start as pending
+    });
+    console.log(`[API] Withdrawal saved in DB: tx_ref=${tx_ref}`);
+  } catch (err) {
+    console.error('[API] Error saving withdrawal in DB:', err.message);
+    return res.status(500).json({ success: false, message: 'Error saving withdrawal.' });
+  }
+
+  // 2️⃣ Prepare Chapa payload
+  const payload = {
+    account_name: name,
+    account_number,
+    amount,
+    currency: 'ETB',
+    reference: tx_ref,
+    bank_code,
+  };
+  console.log('[API] Sending payload to Chapa:', payload);
+
+  // 3️⃣ Initiate Chapa transfer
+  try {
+    const chapaRes = await axios.post('https://api.chapa.co/v1/transfers', payload, {
+      headers: { Authorization: `Bearer ${CHAPA_SECRET_KEY}`, 'Content-Type': 'application/json' },
+    });
+    console.log('[API] Chapa transfer response:', chapaRes.data);
+
+    if (chapaRes.data.status === 'success') {
+      // ✅ Keep status as pending and wait for webhook
+      console.log(`[API] Withdrawal queued. Waiting for webhook notification: tx_ref=${tx_ref}`);
+      return res.json({
+        success: true,
+        message: `Withdrawal of ${amount} ETB queued. You will be notified once Chapa approves.`,
+        tx_ref,
+      });
+    } else {
+      withdrawal.status = 'failed';
+      await withdrawal.save();
+      console.log(`[API] Chapa transfer failed: tx_ref=${tx_ref}`);
+      return res.json({ success: false, message: 'Chapa transfer failed to queue.' });
+    }
+  } catch (err) {
+    withdrawal.status = 'failed';
+    await withdrawal.save();
+    console.error('[API] Error initiating Chapa transfer:', err.response?.data || err.message);
+    return res.json({ success: false, message: 'Server error during withdrawal.' });
+  }
+});
+
+
+
+
+
+
 
 // --- SOCKET.IO CONNECTION ---
 // Socket connection handler
@@ -1384,9 +1534,236 @@ io.on("connection", async (socket) => {
       console.error("[Error in disconnect handler]:", err);
     }
   });
-});
-// Start server
 
+   
+});
+
+
+const dama = io.of('/dama');
+const BOARD_SIZE = 8;
+
+// ---------------------------
+// Socket Connections
+// ---------------------------
+dama.on('connection', (socket) => {
+  console.log(`✅ Player connected: ${socket.id}`);
+
+  // -----------------------
+  // Join Game Room
+  // -----------------------
+  socket.on('joinGameRoom', async ({ roomId, playerId, userName }) => {
+    console.log(`🔹 Player ${playerId} attempting to join room ${roomId}`);
+    try {
+      socket.join(roomId);
+
+      const { room, created, error } = await createOrJoinRoomDama1V1(roomId, playerId, 0, userName);
+      if (error) return socket.emit('errorMessage', error);
+
+      // Initialize game state only if room is newly created
+      if (created) {
+        room.gameState = {
+          board: initializeBoard(),
+          colors: { [playerId]: 'red' },
+          currentTurn: playerId, // first player starts
+          status: 'waiting',
+          winner: null
+        };
+      } else {
+        // Existing room, ensure player color is assigned
+        room.gameState.colors = room.gameState.colors || {};
+        if (!room.gameState.colors[playerId]) {
+          room.gameState.colors[playerId] = Object.values(room.gameState.colors).includes('red') ? 'green' : 'red';
+        }
+        // ✅ Do NOT overwrite currentTurn
+      }
+
+      // Start game if 2 players
+      if (room.players.length === 2 && room.gameState.status !== 'started') {
+        room.gameState.status = 'started';
+      }
+
+      await saveGameState(roomId, room.gameState);
+      dama.to(roomId).emit('gameState', room.gameState);
+
+    } catch (err) {
+      console.error(err);
+      socket.emit('errorMessage', 'Internal server error');
+    }
+  });
+
+  // -----------------------
+  // Player leaves / disconnect
+  // -----------------------
+  const handlePlayerLeave = async (roomId, playerId) => {
+    try {
+      const room = await getRoomDama1V1(roomId);
+      if (!room) return;
+
+      console.log(`🛑 Player ${playerId} leaving room ${roomId}`);
+      room.players = room.players.filter(p => p !== playerId);
+      delete room.gameState.colors[playerId];
+
+      if (room.players.length === 0) {
+        await deleteRoomDama1V1(roomId);
+        console.log(`⚠️ Room ${roomId} deleted (empty)`);
+      } else {
+        if (room.gameState.currentTurn === playerId) room.gameState.currentTurn = room.players[0];
+        await saveGameState(roomId, room.gameState);
+        dama.to(roomId).emit('gameState', room.gameState);
+      }
+
+      socket.to(roomId).emit('playerLeft', { playerId });
+    } catch (err) {
+      console.error(`❌ handlePlayerLeave error for player ${playerId} in room ${roomId}:`, err);
+    }
+  };
+
+  // -----------------------
+  // Player Move Handler
+  // -----------------------
+  const OneVOneResult = require('./models/1V1result');
+  const User = require('./models/user');
+  const stakePercentage = 0.9; // 10% fee applied
+
+  socket.on('playerMove', async ({ roomId, playerId, fromRow, fromCol, toRow, toCol, captured }) => {
+    console.log(`🎲 PlayerMove received from ${playerId} in room ${roomId}`, { fromRow, fromCol, toRow, toCol, captured });
+
+    try {
+      const move = {
+        from: { row: fromRow, col: fromCol },
+        to: { row: toRow, col: toCol },
+        capture: captured ? { row: captured[0], col: captured[1] } : null
+      };
+
+      // Apply move using centralized function
+      const { success, gameState, error } = await applyMove(roomId, move, playerId, dama);
+      if (!success) {
+        console.log(`❌ applyMove failed: ${error}`);
+        return socket.emit('errorMessage', error);
+      }
+
+      // Broadcast updated game state
+      dama.to(roomId).emit('gameState', gameState);
+      console.log(`✅ Move applied for player ${playerId}: (${fromRow},${fromCol}) -> (${toRow},${toCol})`);
+
+      // ------------------------
+      // Handle Game Finished
+      // ------------------------
+      if (gameState.status === 'finished' && gameState.winner) {
+        console.log(`🏆 Game finished in room ${roomId}. Winner: ${gameState.winner}`);
+
+        // Safely fetch the room
+        const room = await getRoomDama1V1(roomId);
+        if (!room) {
+          console.warn(`⚠️ Room ${roomId} not found (possibly already deleted)`);
+          return;
+        }
+
+        const stake = room?.betAmount || 0;
+        const winningAmount = stake * 2 * stakePercentage; // 10% fee applied via stakePercentage
+
+        // ✅ Update winner's balance in DB
+        const winnerUser = await User.findOne({ telegramId: gameState.winner });
+        let newBalance = null;
+        if (winnerUser) {
+          winnerUser.oneVsOne_balance = (winnerUser.oneVsOne_balance || 0) + winningAmount;
+          await winnerUser.save();
+          newBalance = winnerUser.oneVsOne_balance;
+          console.log(`💰 Updated winner balance: ${newBalance}`);
+        }
+
+        // ✅ Save game result only if room has players
+        if (room.players && room.players.length === 2) {
+          await OneVOneResult.create({
+            roomId,
+            player1: { id: room.players[0], name: room.players[0] },
+            player2: { id: room.players[1], name: room.players[1] },
+            winner: gameState.winner,
+            totalStake: stake * 2,
+          });
+        }
+
+        // ✅ Emit gameOver event
+        dama.to(roomId).emit('gameOver', {
+          winnerId: gameState.winner,
+          message: `🏆 Player ${gameState.winner} wins!`,
+          winningAmount,
+          newBalance
+        });
+        console.log(`📣 gameOver event emitted to room ${roomId} with newBalance: ${newBalance}`);
+
+        // ✅ Delete room from Redis after game finished
+        await deleteRoomDama1V1(roomId);
+        console.log(`🗑️ Room ${roomId} deleted from Redis after game finished`);
+      }
+
+    } catch (err) {
+      console.error(`❌ playerMove error for ${playerId} in room ${roomId}:`, err);
+      socket.emit('errorMessage', 'Internal server error');
+    }
+  });
+
+  // -----------------------
+  // Graceful Disconnect
+  // -----------------------
+  const disconnectedPlayers = {}; // { playerId: timeoutId }
+
+  socket.on('dislink', async ({ roomId, playerId }) => {
+    try {
+      const leavingPlayerId = playerId || socket.id;
+
+      // If roomId not provided, find all rooms containing this player
+      const targetRooms = roomId
+        ? [{ roomId }]
+        : (await getAllRoomsDama1V1())
+            .filter(r => r.players.includes(leavingPlayerId))
+            .map(r => ({ roomId: r.roomId }));
+
+      for (const r of targetRooms) {
+        const room = await getRoomDama1V1(r.roomId);
+        if (!room) continue;
+
+        if (room.gameState.status === 'finished' || room.gameState.winner) {
+          console.log(`🛑 Player ${leavingPlayerId} leaving room ${r.roomId} (game finished)`);
+          room.players = room.players.filter(p => p !== leavingPlayerId);
+          delete room.gameState.colors[leavingPlayerId];
+
+          if (room.players.length === 0) {
+            await deleteRoomDama1V1(r.roomId);
+            console.log(`⚠️ Room ${r.roomId} deleted (empty)`);
+          } else {
+            await saveGameState(r.roomId, room.gameState);
+            dama.to(r.roomId).emit('gameState', room.gameState);
+          }
+
+          socket.to(r.roomId).emit('playerLeft', { playerId: leavingPlayerId });
+        } else {
+          console.log(`⚠️ Player ${leavingPlayerId} disconnected but remains in room ${r.roomId} (game ongoing)`);
+          dama.to(r.roomId).emit('playerDisconnected', { playerId: leavingPlayerId });
+        }
+      }
+    } catch (err) {
+      console.error(`❌ dislink error for player ${playerId || socket.id}:`, err);
+    }
+  });
+
+  // -----------------------
+  // Reconnect handler
+  // -----------------------
+  socket.on('reconnectPlayer', ({ roomId, playerId }) => {
+    if (disconnectedPlayers[playerId]) {
+      clearTimeout(disconnectedPlayers[playerId]);
+      delete disconnectedPlayers[playerId];
+      console.log(`🔹 Player ${playerId} reconnected, canceling scheduled leave`);
+    }
+  });
+
+});
+
+
+
+
+// Start server
 server.listen(PORT, () => {
   console.log(`🚀 Server running at http://localhost:${PORT}`);
 });

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dama 1v1 Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="dashboard-container">
+    <h1>Welcome To EthioDama Page</h1>
+
+    <!-- ---------------- User Info ---------------- -->
+    <div class="user-info">
+      <h2>Your Info</h2>
+      <p><strong>Name:</strong> <span id="username">Loading...</span></p>
+      <p><strong>Balance:</strong> <span id="balance">Loading...</span></p>
+      <p><strong>Joined:</strong> <span id="createdAt">Loading...</span></p>
+    </div>
+
+    <!-- ---------------- Play / Create Room with Stake ---------------- -->
+    <div class="stake-section">
+  <h2>Select Stake Amount</h2>
+  <div id="stakeButtons">
+    <!-- Buttons will be generated dynamically -->
+  </div>
+  <button id="playBtn" class="btn">Create Room</button>
+</div>
+
+    
+
+    <!-- ---------------- My Created Games ---------------- -->
+    <div class="my-created-games">
+      <h2>My Created Games</h2>
+      <div id="myCreatedRooms">No games created yet.</div>
+    </div>
+
+    <!-- ---------------- Available Rooms ---------------- -->
+    <div class="rooms">
+      <h2>Available Rooms</h2>
+      <div id="availableRooms">Loading rooms...</div>
+
+
+
+<div class="history-section">
+  <div class="history-nav">
+    <button id="btnGameHistory" class="active">Game History</button>
+    <button id="btnMyHistory">My History</button>
+  </div>
+
+  <div id="gameHistory" class="history-content active">
+    <!-- Game history items here -->
+  </div>
+
+  <div id="myGameHistory" class="history-content">
+    <!-- My history items here -->
+  </div>
+</div>
+
+  
+
+    </div>
+  </div>
+
+
+  <script>
+
+    const stake = urlParams.get('stake') || 0;
+    document.getElementById('stakeDisplay').textContent = `Stake: ${stake} birr`;
+
+  </script>
+  <!-- ---------------- Script ---------------- -->
+  <script src="dashboard.js"></script>
+</body>
+</html>

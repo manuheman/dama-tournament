@@ -1,5 +1,12 @@
 document.addEventListener('DOMContentLoaded', () => {
   const tbody = document.querySelector('#fixtures-table tbody');
+  const modalOverlay = document.getElementById('modalOverlay');
+  const editModal = document.getElementById('editModal');
+  const matchTimeInput = document.getElementById('matchTimeInput');
+  const saveBtn = document.getElementById('saveBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+
+  let currentTournamentCode = null;
 
   async function loadFixtures() {
     try {
@@ -40,7 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
           <td colspan="4"></td>
           <td>
             <button class="view-fixtures-btn" data-tournament="${tournamentCode}">View Fixtures</button>
-            <button class="delete-tournament-btn" data-tournament="${tournamentCode}">Delete All Fixtures</button>
+            <button class="set-matchtime-btn" data-tournament="${tournamentCode}" style="margin-top:5px;">Set Match Time</button>
+            <button class="delete-tournament-btn" data-tournament="${tournamentCode}" style="margin-top:5px;">Delete All Fixtures</button>
             <br/>
             <small style="color:green;">${numRooms} room(s) created</small>
           </td>
@@ -63,6 +71,20 @@ document.addEventListener('DOMContentLoaded', () => {
         button.addEventListener('click', e => {
           const tournamentCode = e.target.getAttribute('data-tournament');
           toggleFixtures(tournamentCode);
+        });
+      });
+
+      // Set Match Time for entire tournament
+      tbody.querySelectorAll('.set-matchtime-btn').forEach(button => {
+        button.addEventListener('click', e => {
+          currentTournamentCode = e.target.getAttribute('data-tournament');
+          // Optional: pre-fill with first match time if exists
+          const firstFixture = grouped[currentTournamentCode].fixtures[0];
+          matchTimeInput.value = firstFixture.matchTime
+            ? new Date(firstFixture.matchTime).toISOString().slice(0, 16)
+            : '';
+          modalOverlay.style.display = 'block';
+          editModal.style.display = 'block';
         });
       });
 
@@ -102,58 +124,19 @@ document.addEventListener('DOMContentLoaded', () => {
               : '';
 
             const roomLine = fx.roomId
-              ? `<br/>
-                  <span style="color:green;">Room ID: ${fx.roomId}</span>
-                  <button data-room-id="${fx.roomId}" class="delete-room-btn" style="margin-left:10px;">Delete Room</button>`
+              ? `<br/><span style="color:green;">Room ID: ${fx.roomId}</span>
+                 <button data-room-id="${fx.roomId}" class="delete-room-btn" style="margin-left:10px;">Delete Room</button>`
               : `<span style="color:red;">No room yet</span>`;
 
             return `
               <li style="margin-bottom:12px;">
                 <strong>Match ${i + 1}:</strong> ${fx.player1} vs ${fx.player2 || 'BYE'}<br/>
                 Result: ${fx.result || '-'}<br/>
-                Match Time:
-                <input type="datetime-local" id="matchTimeInput-${fx._id}" value="${matchTimeValue}" style="margin-right:8px;" />
-                <button data-fixture-id="${fx._id}" class="save-matchtime-btn">Save</button>
-                <span class="save-status" id="saveStatus-${fx._id}" style="margin-left:8px;color:green;display:none;">Saved!</span>
-                <span class="save-error" id="saveError-${fx._id}" style="margin-left:8px;color:red;display:none;">Error saving.</span>
+                Match Time: ${matchTimeValue || '-'}<br/>
                 ${roomLine}
               </li>
             `;
           }).join('');
-
-          // Save match time listeners
-          ul.querySelectorAll('.save-matchtime-btn').forEach(btn => {
-            btn.addEventListener('click', async e => {
-              const fixtureId = e.target.getAttribute('data-fixture-id');
-              const input = document.querySelector(`#matchTimeInput-${fixtureId}`);
-              const status = document.querySelector(`#saveStatus-${fixtureId}`);
-              const error = document.querySelector(`#saveError-${fixtureId}`);
-
-              status.style.display = 'none';
-              error.style.display = 'none';
-
-              const newTime = input.value;
-              if (!newTime) {
-                error.textContent = 'Please select a date/time.';
-                error.style.display = '';
-                return;
-              }
-
-              try {
-                const response = await fetch(`/api/admin/fixtures/${fixtureId}`, {
-                  method: 'PATCH',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ matchTime: new Date(newTime).toISOString() })
-                });
-
-                if (!response.ok) throw new Error('Failed to save match time.');
-                status.style.display = '';
-              } catch (err) {
-                console.error(err);
-                error.style.display = '';
-              }
-            });
-          });
 
           // Delete room listeners
           ul.querySelectorAll('.delete-room-btn').forEach(btn => {
@@ -172,20 +155,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!confirm(`Delete game room with Room ID ${roomId}?`)) return;
 
         try {
-          const res = await fetch(`/api/game-rooms/${roomId}`, {
-            method: 'DELETE',
-          });
-
-          if (!res.ok) {
-            let errData;
-            try {
-              errData = await res.json();
-            } catch {
-              errData = { error: 'Unknown error' };
-            }
-            throw new Error(errData.error || 'Failed to delete room');
-          }
-
+          const res = await fetch(`/api/game-rooms/${roomId}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error('Failed to delete room');
           alert('✅ Room deleted successfully.');
           loadFixtures();
         } catch (err) {
@@ -193,11 +164,42 @@ document.addEventListener('DOMContentLoaded', () => {
           alert('❌ Error deleting room.');
         }
       }
+
     } catch (error) {
       console.error('Error loading fixtures:', error);
       tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;">Error loading fixtures.</td></tr>`;
     }
   }
+
+  // Modal Save
+  saveBtn.addEventListener('click', async () => {
+    if (!currentTournamentCode) return;
+    const newTime = matchTimeInput.value;
+    if (!newTime) return alert('Please select a match time.');
+
+    try {
+      const res = await fetch(`/api/admin/fixtures/set-matchtime/${currentTournamentCode}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ matchTime: new Date(newTime).toISOString() })
+      });
+
+      if (!res.ok) throw new Error('Failed to set match time.');
+
+      alert('✅ Match time set for all matches in this tournament.');
+      modalOverlay.style.display = 'none';
+      editModal.style.display = 'none';
+      loadFixtures();
+    } catch (err) {
+      console.error(err);
+      alert('❌ Error setting match time.');
+    }
+  });
+
+  cancelBtn.addEventListener('click', () => {
+    modalOverlay.style.display = 'none';
+    editModal.style.display = 'none';
+  });
 
   // Initial load
   loadFixtures();

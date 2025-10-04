@@ -1,0 +1,321 @@
+/* -----------------------------
+   General Body
+----------------------------- */
+body {
+  font-family: 'Poppins', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); /* Deep modern gradient */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  margin: 0;
+  color: #eaeaea;
+}
+
+/* -----------------------------
+   Dashboard Container
+----------------------------- */
+.dashboard-container {
+  background: rgba(255, 255, 255, 0.12); /* glass effect */
+  backdrop-filter: blur(12px);
+  padding: 40px 30px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  width: 440px;
+  max-width: 95%;
+  text-align: center;
+  animation: fadeIn 0.8s ease-in-out;
+  transition: all 0.3s ease;
+}
+
+/* Fade-in Animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-25px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* -----------------------------
+   Headings
+----------------------------- */
+h1 {
+  color: #ffffff;
+  margin-bottom: 25px;
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+h2 {
+  color: #b0d4ff;
+  margin-bottom: 15px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+/* -----------------------------
+   User Info
+----------------------------- */
+.user-info {
+  text-align: left;
+  margin-bottom: 25px;
+  padding: 18px 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.2);
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.user-info p {
+  font-size: 16px;
+  margin: 8px 0;
+  color: #e0e0e0;
+}
+
+/* -----------------------------
+   Play Button
+----------------------------- */
+button#playBtn {
+  background: linear-gradient(45deg, #ff416c, #ff4b2b);
+  color: #fff;
+  border: none;
+  padding: 14px 30px;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 14px;
+  transition: all 0.3s ease;
+  margin-bottom: 25px;
+  box-shadow: 0 8px 20px rgba(255, 65, 108, 0.4);
+}
+
+button#playBtn:hover {
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 0 12px 30px rgba(255, 65, 108, 0.6);
+}
+
+/* -----------------------------
+   Rooms Section
+----------------------------- */
+.rooms {
+  text-align: left;
+}
+
+#availableRooms {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.room {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 15px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.15);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.3);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.25s ease;
+}
+
+.room:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px rgba(0,0,0,0.5);
+}
+
+.room button {
+  background: linear-gradient(45deg, #36d1dc, #5b86e5);
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(91,134,229,0.4);
+}
+
+.room button:hover {
+  background: linear-gradient(45deg, #5b86e5, #36d1dc);
+  transform: scale(1.08);
+  box-shadow: 0 6px 18px rgba(91,134,229,0.6);
+}
+
+/* -----------------------------
+   Stake Display
+----------------------------- */
+.stake-display {
+  font-size: 18px;
+  font-weight: bold;
+  color: #fff;
+  background: linear-gradient(45deg, #ff9a9e, #fad0c4);
+  padding: 8px 16px;
+  border-radius: 10px;
+  text-align: center;
+  box-shadow: 0 4px 14px rgba(255,154,158,0.4);
+}
+
+/* -----------------------------
+   My Created Games Section
+----------------------------- */
+.my-created-games {
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid #4CAF50;
+  border-radius: 14px;
+  padding: 20px;
+  margin: 20px 0;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.3);
+}
+
+.my-created-games h2 {
+  color: #7dffb0;
+  font-size: 1.4em;
+  margin-bottom: 15px;
+  font-weight: 700;
+}
+
+#myCreatedRooms {
+  font-size: 1em;
+  color: #eaeaea;
+  background: rgba(255,255,255,0.05);
+  padding: 12px;
+  border-radius: 8px;
+  min-height: 50px;
+}
+
+#myCreatedRooms .room-item {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 8px;
+  background: rgba(125,255,176,0.1);
+  font-weight: 500;
+  color: #a8ffdc;
+}
+
+/* -----------------------------
+   History Section
+----------------------------- */
+.history-section {
+  background: rgba(255,255,255,0.1);
+  border: 2px solid #2196F3;
+  border-radius: 14px;
+  padding: 20px;
+  margin: 20px 0;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.3);
+  text-align: left;
+}
+
+/* Sub-nav Buttons */
+.history-nav {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.history-nav button {
+  flex: 1;
+  padding: 10px 0;
+  background: rgba(227, 242, 253, 0.15);
+  border: none;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 15px;
+  color: #fff;
+}
+
+.history-nav button.active {
+  background: linear-gradient(45deg, #2196F3, #21CBF3);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(33,203,243,0.5);
+}
+
+.history-nav button:hover {
+  background: rgba(144,202,249,0.3);
+  transform: translateY(-2px);
+}
+
+/* History Lists */
+.history-content {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.history-content.active {
+  display: flex;
+}
+
+.history-content div {
+  background: rgba(255,255,255,0.08);
+  padding: 12px 15px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.2);
+  font-size: 14px;
+  color: #ddd;
+}
+
+/* Scrollbar Styling */
+.history-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.history-content::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.3);
+  border-radius: 3px;
+}
+
+/* -----------------------------
+   Responsive
+----------------------------- */
+@media (max-width: 480px) {
+  .dashboard-container {
+    padding: 28px 18px;
+  }
+
+  button#playBtn {
+    width: 100%;
+  }
+
+  .room {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .history-nav button {
+    font-size: 14px;
+    padding: 8px 0;
+  }
+
+  .history-content {
+    max-height: 200px;
+  }
+}
+
+
+.stake-btn {
+  margin: 5px;
+  padding: 10px 15px;
+  border: 1px solid #333;
+  background-color: #f0f0f0;
+  cursor: pointer;
+  border-radius: 5px;
+  font-weight: bold;
+}
+
+.stake-btn:hover {
+  background-color: #ddd;
+}
+
+.stake-btn.selected {
+  background-color: #4CAF50;
+  color: white;
+  border-color: #4CAF50;
+}
