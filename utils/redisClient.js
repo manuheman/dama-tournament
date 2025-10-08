@@ -1,6 +1,21 @@
 const Redis = require('ioredis');
 const redisClient = new Redis();
 
+// Listen for Redis connection events
+redisClient.on('connect', () => console.log('✅ Redis connected'));
+redisClient.on('error', (err) => console.error('❌ Redis error:', err));
+
+// Periodically ping Redis every 5 minutes to prevent idle disconnect
+setInterval(async () => {
+  try {
+    await redisClient.ping();
+    // console.log('Redis ping successful'); // optional debug log
+  } catch (err) {
+    console.error('❌ Redis ping failed:', err);
+  }
+}, 5 * 60 * 1000); // 5 minutes in milliseconds
+
+
 const GAME_ROOM_PREFIX = 'dama:room:';
 const EMPTY_ROOM_TIMEOUT = 5 * 60 * 1000; // 5 minutes
 

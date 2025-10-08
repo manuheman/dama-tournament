@@ -45,6 +45,14 @@ const postRegistrationMenu = [
     { text: '🤝 1v1 Game', callback_data: 'post_1v1' }
   ],
   [
+    { text: '💳 Deposit', callback_data: '1v1_deposit' },
+    { text: '🏦 Withdraw', callback_data: '1v1_withdraw' }
+  ],
+  [
+    { text: '💰 Balance', callback_data: '1v1_balance' },
+    { text: '📜 Transaction', callback_data: '1v1_transaction' }
+  ],
+  [
     { text: 'ℹ️ My Info', callback_data: 'my_info' },
     { text: '📞 Contact Us', callback_data: 'contact_us' }
   ],
@@ -55,11 +63,12 @@ const postRegistrationMenu = [
 
 
 
+
 const withdrawalMethodButtons = [
   [{ text: 'Telebirr', callback_data: 'withdraw_telebirr' }],
   [{ text: 'CBE Birr', callback_data: 'withdraw_cbe' }],
   [{ text: 'M-Pesa', callback_data: 'withdraw_mpesa' }],
-  [{ text: '⬅️ Back', callback_data: 'post_1v1' }]
+  [{ text: '⬅️ Back', callback_data: 'back_to_post' }]
 ];
 
 
@@ -218,6 +227,36 @@ async function initiateChapaWithdrawal(withdrawal, userName) {
   }
 }
 
+function normalizePhone(phone) {
+  if (!phone) return null;
+
+  // Remove spaces, dashes, plus signs
+  let cleaned = phone.replace(/[\s-+]/g, '');
+
+  // If it starts with '0', convert to +251
+  if (cleaned.startsWith('0')) {
+    return '+251' + cleaned.substring(1);
+  }
+
+  // If it already starts with '251', add plus
+  if (cleaned.startsWith('251')) {
+    return '+251' + cleaned.substring(3);
+  }
+
+  // If it already starts with +251 (after cleanup)
+  if (cleaned.startsWith('251')) {
+    return '+251' + cleaned.substring(3);
+  }
+
+  // If it already has +251
+  if (phone.startsWith('+251')) {
+    return phone;
+  }
+
+  // Default: just return with +251
+  return '+251' + cleaned;
+}
+
 
 
 
@@ -243,39 +282,45 @@ const tournamentTypeButtons = [
 ];
 
 // ----- /start -----
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const telegramId = msg.from.id;
 
-  try {
-    const existingUser = await getCachedUser(chatId, telegramId);
+  // ✅ Respond immediately
+  bot.sendMessage(chatId, '👋 Hello! Preparing your dashboard...');
 
-    // ----- If user is already registered -----
-    if (existingUser) {
-      const imagePath = path.join(__dirname, "IMG.jpg");
-      if (fs.existsSync(imagePath)) {
-        const stream = fs.createReadStream(imagePath);
-        await bot.sendPhoto(chatId, stream, {
-          caption: `🎉 Welcome back, ${existingUser.name}!`,
-          reply_markup: { inline_keyboard: postRegistrationMenu }
-        });
-      } else {
-        await bot.sendMessage(chatId, `🎉 Welcome back, ${existingUser.name}!`, {
-          reply_markup: { inline_keyboard: postRegistrationMenu }
-        });
+  (async () => {
+    try {
+      const existingUser = await getCachedUser(chatId, telegramId);
+
+      // ----- If user is already registered -----
+      if (existingUser) {
+        const imagePath = path.join(__dirname, "IMG.jpg");
+        if (fs.existsSync(imagePath)) {
+          const stream = fs.createReadStream(imagePath);
+          await bot.sendPhoto(chatId, stream, {
+            caption: `🎉 Welcome back, ${existingUser.name}!`,
+            reply_markup: { inline_keyboard: postRegistrationMenu }
+          });
+        } else {
+          await bot.sendMessage(chatId, `🎉 Welcome back, ${existingUser.name}!`, {
+            reply_markup: { inline_keyboard: postRegistrationMenu }
+          });
+        }
+        return;
       }
-      return;
+
+      // ----- If user is not registered: start registration -----
+      await bot.sendMessage(chatId, 'Welcome! Please send me your full name:');
+      waitingForName.add(chatId);
+
+    } catch (err) {
+      console.error('Error on /start:', err);
+      await bot.sendMessage(chatId, '⚠️ Something went wrong, please try again.');
     }
-
-    // ----- If user is not registered: start registration -----
-    bot.sendMessage(chatId, 'Welcome! Please send me your full name:');
-    waitingForName.add(chatId);
-
-  } catch (err) {
-    console.error('Error on /start:', err);
-    bot.sendMessage(chatId, '⚠️ Something went wrong, please try again.');
-  }
+  })();
 });
+
 
 
 
@@ -413,13 +458,13 @@ bot.on('message', async (msg) => {
 
       console.log(`[Chapa Deposit] Sending deposit request to server API for chatId: ${chatId}, amount: ${amount}, phone: ${phone}`);
 
-      const response = await axios.post(`${process.env.NGROK_URL}/api/deposit`, { chatId, amount, phone });
-      console.log('[Chapa Deposit] Server response:', response.data);
+  const response = await axios.post(`${process.env.NGROK_URL}/api/deposit/init`, { chatId, amount, phone });
+  console.log('[Chapa Deposit] Server response:', response.data);
 
       return bot.sendMessage(chatId, `💳 Complete your payment via Chapa by clicking below:`, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: `Pay ${amount} Birr via Chapa`, url: response.data.checkoutUrl }],
+            [{ text: `Pay ${amount} Birr via Chapa`, url: response.data.checkout_url }],
             [{ text: '⬅️ Back', callback_data: 'post_1v1' }]
           ]
         }
@@ -455,36 +500,52 @@ if (waitingForWithdrawAmount.has(chatId)) {
 //telebirr number asking step
 // ----- Telebirr Number Step -----
 
-// ----- Telebirr Number Step -----
+// ----- Withdrawal Phone Steps (by wallet) -----
 if (waitingForWithdrawPhone.has(chatId)) {
   const state = waitingForWithdrawPhone.get(chatId);
 
-  if (state.step === 'waitingForTelebirrNumber') {
-    let phone = msg.text.trim();
-    if (!/^\d{10}$/.test(phone)) {
-      return bot.sendMessage(chatId, '❌ Invalid Telebirr number. Please enter a 10-digit number.');
+  const processWithdrawal = async ({ walletLabel, walletCode }) => {
+    let raw = (msg.text || '').trim();
+    let phone;
+    try {
+      phone = normalizePhone(raw);
+    } catch {
+      return bot.sendMessage(chatId, `❌ Invalid ${walletLabel} number. Please send a valid phone (e.g., 09xxxxxxxx, 07xxxxxxxx, 2519xxxxxxxx, or +2519xxxxxxxx).`);
     }
 
     const user = await getCachedUser(chatId, telegramId);
     if (!user) return bot.sendMessage(chatId, '❌ User not found.');
 
-    const withdrawal = await Withdraw.create({
-      userId: user._id,
-      amount: state.amount,
-      phone,
-      tx_ref: `withdraw-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      status: 'pending'
-    });
-
-    user.oneVsOne_balance -= state.amount;
-    await user.save();
-
     waitingForWithdrawPhone.delete(chatId);
+    bot.sendMessage(chatId, `⏳ Initiating your withdrawal of ${state.amount} ETB via ${walletLabel}...`);
 
-    bot.sendMessage(chatId, `⏳ Initiating your withdrawal of ${state.amount} ETB via Telebirr...`);
+    try {
+      const resp = await axios.post(`${process.env.NGROK_URL}/api/withdraw`, {
+        chatId,
+        amount: state.amount,
+        phone,
+        wallet: walletCode,          // TELEBIRR | CBE_BIRR | MPESA
+        channel: 'MOBILE_MONEY'
+      });
+      const status = resp.data?.status || 'pending';
+      if (status === 'success') {
+        return bot.sendMessage(chatId, `✅ Withdrawal of ${state.amount} ETB via ${walletLabel} successful.`);
+      }
+      return bot.sendMessage(chatId, `⏳ Withdrawal via ${walletLabel} queued. Status: ${status}. We'll notify you when it's complete.`);
+    } catch (e) {
+      console.error('[Withdraw] API error:', e.response?.data || e.message);
+      return bot.sendMessage(chatId, `❌ ${walletLabel} withdrawal failed to start. Please try again later.`);
+    }
+  };
 
-    const result = await initiateChapaWithdrawal(withdrawal, user.name);
-    bot.sendMessage(chatId, result.message);
+  if (state.step === 'waitingForTelebirrNumber') {
+    return processWithdrawal({ walletLabel: 'Telebirr', walletCode: 'TELEBIRR' });
+  }
+  if (state.step === 'waitingForCbeNumber') {
+    return processWithdrawal({ walletLabel: 'CBE Birr', walletCode: 'CBE_BIRR' });
+  }
+  if (state.step === 'waitingForMpesaNumber') {
+    return processWithdrawal({ walletLabel: 'M-Pesa', walletCode: 'MPESA' });
   }
 }
 
@@ -542,190 +603,205 @@ const waitingForChapaAmount = new Map(); // chatId => {}
 const waitingForChapaPhone = new Map();  // chatId => { amount }
 
 // ----- Callback Queries -----
-bot.on('callback_query', async (callbackQuery) => {
+bot.on('callback_query', (callbackQuery) => {
   const msg = callbackQuery.message;
   const chatId = msg.chat.id;
   const messageId = msg.message_id;
   const data = callbackQuery.data;
   const telegramId = callbackQuery.from.id;
 
+  // ✅ Respond immediately to remove Telegram button "loading"
   bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
 
-  const requireRegistration = async (backData = 'back_to_main') => {
-    await editMessage(chatId, messageId, '❌ Please register first using /start.', [
-      [{ text: '⬅️ Back', callback_data: backData }]
-    ]);
-  };
+  (async () => { // async wrapper to preserve all awaits
+    const requireRegistration = async (backData = 'back_to_main') => {
+      await editMessage(chatId, messageId, '❌ Please register first using /start.', [
+        [{ text: '⬅️ Back', callback_data: backData }]
+      ]);
+    };
 
-  const user = await getCachedUser(chatId, telegramId);
-  const removePreviousButtons = async () => {
-    try { await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }); } catch {}
-  };
+    const user = await getCachedUser(chatId, telegramId);
+    const removePreviousButtons = async () => {
+      try { await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: messageId }); } catch {}
+    };
 
-  // ----- Helper buttons -----
-  const oneVsOneMenu = [
-    [
-      { text: '🎮 Play', callback_data: '1v1_play' },
-      { text: '💰 Balance', callback_data: '1v1_balance' }
-    ],
-    [
-      { text: '💳 Deposit', callback_data: '1v1_deposit' },
-      { text: '🏦 Withdraw', callback_data: '1v1_withdraw' }
-    ],
-    [
-      { text: '📜 Transaction', callback_data: '1v1_transaction' },
-      { text: '⬅️ Back', callback_data: 'back_to_post' }
-    ]
-  ];
+    // ----- Helper buttons -----
+    const oneVsOneMenu = [
+      [{ text: '🎮 Play', callback_data: '1v1_play' }],
+      [{ text: '💰 Balance', callback_data: '1v1_balance' }],
+      [{ text: '⬅️ Back', callback_data: 'back_to_post' }]
+    ];
 
-  const chapaOrArifButtons = [
-    [{ text: '💳 Chapa Pay', callback_data: 'deposit_chapa' }],
-    [{ text: '💳 ArifPay', callback_data: 'deposit_arifpay' }],
-    [{ text: '⬅️ Back', callback_data: 'post_1v1' }]
-  ];
+    const chapaOrArifButtons = [
+      [{ text: '💳 Chapa Pay', callback_data: 'deposit_chapa' }],
+      [{ text: '💳 ArifPay', callback_data: 'deposit_arifpay' }],
+      [{ text: '⬅️ Back', callback_data: 'back_to_post' }]
+    ];
 
-  try {
-    switch (true) {
+    try {
+      switch (true) {
 
-      // ----- User Info -----
-      case data === 'my_info':
-        if (!user) return requireRegistration();
-        await removePreviousButtons();
-        return editMessage(
-          chatId,
-          messageId,
-          `Your Info:\n\nName: ${user.name}\nTelegram: @${user.telegram_username || 'N/A'}\nPhone: ${user.phone_number}`,
-          [[{ text: '⬅️ Back', callback_data: 'back_to_post' }]]
-        );
+        // ----- User Info -----
+        case data === 'my_info':
+          if (!user) return requireRegistration();
+          await removePreviousButtons();
+          return editMessage(
+            chatId,
+            messageId,
+            `Your Info:\n\nName: ${user.name}\nTelegram: @${user.telegram_username || 'N/A'}\nPhone: ${user.phone_number}`,
+            [[{ text: '⬅️ Back', callback_data: 'back_to_post' }]]
+          );
 
-      // ----- Tournament Registration -----
-      case data === 'register_tournament':
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '🎯 *Choose Tournament Type* 🎯', tournamentTypeButtons);
+        // ----- Tournament Registration -----
+        case data === 'register_tournament':
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '🎯 *Choose Tournament Type* 🎯', tournamentTypeButtons);
 
-      case data.startsWith('type_'):
-        if (!user) return requireRegistration();
-        const selectedType = data.split('_')[1];
-        waitingForTournamentType.set(chatId, selectedType);
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, `💰 You selected ${selectedType} tournament.\nPlease select your preferred amount:`, balanceButtons(selectedType));
+        case data.startsWith('type_'):
+          if (!user) return requireRegistration();
+          const selectedType = data.split('_')[1];
+          waitingForTournamentType.set(chatId, selectedType);
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, `💰 You selected ${selectedType} tournament.\nPlease select your preferred amount:`, balanceButtons(selectedType));
 
-      case data.startsWith('balance_'):
-        if (!user) return requireRegistration();
-        const parts = data.split('_');
-        const type = parts[1];
-        const amount = Number(parts[2]);
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, `💳 Choose a payment method for ${amount} Birr:`, paymentMethodButtons(type, amount));
+        case data.startsWith('balance_'):
+          if (!user) return requireRegistration();
+          const parts = data.split('_');
+          const type = parts[1];
+          const amount = Number(parts[2]);
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, `💳 Choose a payment method for ${amount} Birr:`, paymentMethodButtons(type, amount));
 
-      case data.startsWith('pay_'):
-        if (!user) return requireRegistration();
-        const [, payType, payAmountStr, method] = data.split('_');
-        const payAmount = Number(payAmountStr);
-        try {
-          const checkoutUrl = await createArifPayPayment(payAmount, user, payType, method);
-          await bot.sendMessage(chatId, `💵 Complete your payment here:\n${checkoutUrl}`);
-        } catch {
-          await bot.sendMessage(chatId, "⚠️ Failed to create payment session. Please try again.");
-        }
-        break;
+        case data.startsWith('pay_'):
+          if (!user) return requireRegistration();
+          const [, payType, payAmountStr, method] = data.split('_');
+          const payAmount = Number(payAmountStr);
+          try {
+            const checkoutUrl = await createArifPayPayment(payAmount, user, payType, method);
+            await bot.sendMessage(chatId, `💵 Complete your payment here:\n${checkoutUrl}`);
+          } catch {
+            await bot.sendMessage(chatId, "⚠️ Failed to create payment session. Please try again.");
+          }
+          break;
 
-      // ----- 1v1 Menu -----
-      case data === 'post_1v1':
-        if (!user) return requireRegistration();
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '🤝 Choose 1v1 Game Type:', oneVsOneMenu);
+        // ----- 1v1 Menu -----
+        case data === 'post_1v1':
+          if (!user) return requireRegistration();
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '🤝 Choose 1v1 Game Type:', oneVsOneMenu);
 
-      case data === 'back_to_post':
-        if (!user) return requireRegistration();
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '✅ Choose an option:', postRegistrationMenu);
+        case data === 'back_to_post':
+          if (!user) return requireRegistration();
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '✅ Choose an option:', postRegistrationMenu);
 
-      case data === '1v1_balance':
-        if (!user) return requireRegistration('post_1v1');
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, `💰 Your 1v1 Balance: ${user.oneVsOne_balance || 0} Birr`, [[{ text: '⬅️ Back', callback_data: 'post_1v1' }]]);
-
-
+        case data === '1v1_balance':
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, `💰 Your 1v1 Balance: ${user.oneVsOne_balance || 0} Birr`, [[{ text: '⬅️ Back', callback_data: 'back_to_post' }]]);
 
         //1v1 withdrawal
         case data === '1v1_withdraw':
-  if (!user) return requireRegistration('post_1v1');
-  await removePreviousButtons();
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
 
-  // Ask user for withdrawal amount
-  waitingForWithdrawAmount.set(chatId, {});
-  return bot.sendMessage(chatId, '💵 Enter the amount you want to withdraw:');
+          // Ask user for withdrawal amount
+          waitingForWithdrawAmount.set(chatId, {});
+          return bot.sendMessage(chatId, '💵 Enter the amount you want to withdraw:');
 
-  //telebirr part
+        //telebirr part
+        case data === 'withdraw_telebirr':
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
 
-  case data === 'withdraw_telebirr':
-  if (!user) return requireRegistration('post_1v1');
-  await removePreviousButtons();
+          const state = waitingForWithdrawPhone.get(chatId);
+          if (!state || !state.amount) return bot.sendMessage(chatId, '❌ Please enter withdrawal amount first.');
 
-  const state = waitingForWithdrawPhone.get(chatId);
-  if (!state || !state.amount) return bot.sendMessage(chatId, '❌ Please enter withdrawal amount first.');
+          // ✅ Set step to expect Telebirr number
+          state.method = 'telebirr';
+          state.step = 'waitingForTelebirrNumber';
+          waitingForWithdrawPhone.set(chatId, state);
 
-  // ✅ Set step to expect Telebirr number
-  state.method = 'telebirr';
-  state.step = 'waitingForTelebirrNumber';
-  waitingForWithdrawPhone.set(chatId, state);
+          return bot.sendMessage(chatId, '📱 Please enter your Telebirr number for withdrawal:');
 
-  return bot.sendMessage(chatId, '📱 Please enter your Telebirr number for withdrawal:');
+        case data === 'withdraw_cbe':
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
 
+          const cbeState = waitingForWithdrawPhone.get(chatId);
+          if (!cbeState || !cbeState.amount) return bot.sendMessage(chatId, '❌ Please enter withdrawal amount first.');
 
+          cbeState.method = 'cbe_birr';
+          cbeState.step = 'waitingForCbeNumber';
+          waitingForWithdrawPhone.set(chatId, cbeState);
 
-      // ----- 1v1 Deposit Flow -----
-      case data === '1v1_deposit':
-        if (!user) return requireRegistration('post_1v1');
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '💳 Choose your payment method:', chapaOrArifButtons);
+          return bot.sendMessage(chatId, '🏦 Please enter your CBE Birr phone number for withdrawal:');
 
-      case data === 'deposit_chapa':
-        if (!user) return requireRegistration('post_1v1');
-        await removePreviousButtons();
-        waitingForChapaAmount.set(chatId, {});
-        return bot.sendMessage(chatId, '💰 Enter the amount you want to deposit via Chapa:');
+        case data === 'withdraw_mpesa':
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
 
-      case data === 'deposit_arifpay':
-        await removePreviousButtons();
-        return bot.sendMessage(chatId, '⚠️ ArifPay integration coming soon.');
+          const mpesaState = waitingForWithdrawPhone.get(chatId);
+          if (!mpesaState || !mpesaState.amount) return bot.sendMessage(chatId, '❌ Please enter withdrawal amount first.');
 
-      // ----- Tournament / Fixtures / Rules -----
-      case data === 'post_tournament':
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '✨ Main Menu ✨\n\nChoose an option below:', mainMenuButtons(chatId));
+          mpesaState.method = 'mpesa';
+          mpesaState.step = 'waitingForMpesaNumber';
+          waitingForWithdrawPhone.set(chatId, mpesaState);
 
-      case data === 'fixture':
-        if (!user) return requireRegistration('fixture');
-        const fixtures = await getUserFixtures(user._id);
-        await removePreviousButtons();
-        if (!fixtures.length) return editMessage(chatId, messageId, '⚠️ You have no scheduled fixtures yet.', [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]);
-        let text = '📅 Your Tournament Fixtures:\n\n';
-        fixtures.forEach((f, idx) => {
-          text += `${idx + 1}. [${f.tournamentType} | ${f.balance} Birr | Round ${f.round}]\n`;
-          text += `${f.matchText}\nTime: ${f.matchTime}\n\n`;
-        });
-        return editMessage(chatId, messageId, text, [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]);
+          return bot.sendMessage(chatId, '📲 Please enter your M‑Pesa phone number for withdrawal:');
 
-      case data === 'rules_privacy':
-        if (!user) return requireRegistration();
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '*🎲 Ethio Dama – Tournament Rules & Regulations*\n\n...', [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]);
+        // ----- 1v1 Deposit Flow -----
+        case data === '1v1_deposit':
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '💳 Choose your payment method:', chapaOrArifButtons);
 
-      case data === 'back_to_main':
-        await removePreviousButtons();
-        return editMessage(chatId, messageId, '✨ Main Menu ✨\n\nChoose an option below:', mainMenuButtons(chatId));
+        case data === 'deposit_chapa':
+          if (!user) return requireRegistration('post_1v1');
+          await removePreviousButtons();
+          waitingForChapaAmount.set(chatId, {});
+          return bot.sendMessage(chatId, '💰 Enter the amount you want to deposit via Chapa:');
 
-      default:
-        await removePreviousButtons();
-        return bot.answerCallbackQuery(callbackQuery.id, { text: `Button ${data} clicked.` });
+        case data === 'deposit_arifpay':
+          await removePreviousButtons();
+          return bot.sendMessage(chatId, '⚠️ ArifPay integration coming soon.');
+
+        // ----- Tournament / Fixtures / Rules -----
+        case data === 'post_tournament':
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '✨ Main Menu ✨\n\nChoose an option below:', mainMenuButtons(chatId));
+
+        case data === 'fixture':
+          if (!user) return requireRegistration('fixture');
+          const fixtures = await getUserFixtures(user._id);
+          await removePreviousButtons();
+          if (!fixtures.length) return editMessage(chatId, messageId, '⚠️ You have no scheduled fixtures yet.', [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]);
+          let text = '📅 Your Tournament Fixtures:\n\n';
+          fixtures.forEach((f, idx) => {
+            text += `${idx + 1}. [${f.tournamentType} | ${f.balance} Birr | Round ${f.round}]\n`;
+            text += `${f.matchText}\nTime: ${f.matchTime}\n\n`;
+          });
+          return editMessage(chatId, messageId, text, [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]);
+
+        case data === 'rules_privacy':
+          if (!user) return requireRegistration();
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '*🎲 Ethio Dama – Tournament Rules & Regulations*\n\n...', [[{ text: '⬅️ Back to Main Menu', callback_data: 'back_to_main' }]]);
+
+        case data === 'back_to_main':
+          await removePreviousButtons();
+          return editMessage(chatId, messageId, '✨ Main Menu ✨\n\nChoose an option below:', mainMenuButtons(chatId));
+
+        default:
+          await removePreviousButtons();
+          return bot.answerCallbackQuery(callbackQuery.id, { text: `Button ${data} clicked.` });
+      }
+
+    } catch (err) {
+      console.error('Callback query error:', err);
+      bot.sendMessage(chatId, '⚠️ An error occurred. Please try again.');
     }
-
-  } catch (err) {
-    console.error('Callback query error:', err);
-    bot.sendMessage(chatId, '⚠️ An error occurred. Please try again.');
-  }
+  })(); // end async wrapper
 });
 
 

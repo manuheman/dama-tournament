@@ -2,9 +2,6 @@ const dotenv = require("dotenv");
 dotenv.config();
 require('dotenv').config(); // MUST be first
 
-const crypto = require ('crypto');
-const CHAPA_API_KEY = process.env.CHAPA_API_KEY
-
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -12,12 +9,13 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
-const bot = require("./bot");
+const bot  = require('./bot');
 const Fixture = require("./models/fixture");  // adjust path as needed
 const User = require('./models/user'); // adjust path as needed
 const Tournament = require('./models/tournament')
 const Withdraw = require('./models/withdraw'); // adjust path if needed
-const paymentRoutes = require('./routes/PaymentRoutes');
+const paymentsRouter = require('./routes/payments');
+const withdrawalsRouter = require('./routes/withdrawals');
 const PORT = process.env.PORT || 3000;
 
 const redisHelper = require('./utils/redisHelper');
@@ -58,86 +56,57 @@ const TURN_TIME = 30; // seconds per turn (adjust as needed)
 const TIMER_DURATION = 600; // 10 minutes in seconds
 
 
-// MongoDB connection
-mongoose
-  .connect(
-    process.env.MONGO_URL || "mongodb://localhost:27017/my_node_project",
-    {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
+// MongoDB connection (always active)
+mongoose.connect(process.env.MONGO_URL || "mongodb://localhost:27017/my_node_project", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000, // initial connection timeout
+  socketTimeoutMS: 45000          // keep socket alive
+})
+.then(() => {
+  console.log("✅ MongoDB connected");
+
+  // Ping periodically to prevent idle disconnects
+  setInterval(async () => {
+    try {
+      await mongoose.connection.db.admin().ping();
+      console.log("[MongoDB] Ping successful (keep-alive)");
+    } catch (err) {
+      console.error("[MongoDB] Ping failed:", err);
     }
-  )
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+  }, 5 * 60 * 1000); // every 5 minutes
+})
+.catch((err) => console.error("❌ MongoDB connection error:", err));
+
 
 // Middleware
-app.use(bodyParser.json());
-app.use(express.json()); // must be BEFORE routes
+// Preserve rawBody for HMAC verification routes (Chapa webhooks/approvals)
+app.use(bodyParser.json({
+  verify: (req, res, buf) => {
+    try { req.rawBody = Buffer.from(buf); } catch {}
+  }
+}));
+// app.use(express.json()); // bodyParser.json handles JSON and preserves raw body
 app.use(express.static(path.join(__dirname, "public")));
 
 
-app.use("/api", paymentRoutes);
+// Decoupled payments/withdrawals routers
+app.use("/api", paymentsRouter);
+app.use('/api', withdrawalsRouter);
 
-// Telegram bot webhook
-
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-
-// ✅ Load token & ngrok url from env
-const TELEGRAM_BOT_TOKEN =
-  process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rrpS82yaUZHfbM6QqA7RZMji1d5HIo';
-const NGROK_URL =
-  process.env.NGROK_URL || 'https://36a805478122.ngrok-free.app';
-// ✅ Initialize bot (Express will handle requests)
-global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { webHook: true });
-
-// ✅ Function to set webhook only once
-async function initWebhook() {
-  try {
-    const url = `${NGROK_URL}/bot${TELEGRAM_BOT_TOKEN}`;
-
-    // check existing webhook
-    const res = await axios.get(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`
-    );
-
-    if (res.data.result.url !== url) {
-      // set webhook if not already set
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`,
-        { url }
-      );
-      console.log(`[Webhook] Set to: ${url}`);
-    } else {
-      console.log(`[Webhook] Already set to: ${url}`);
-    }
-  } catch (err) {
-    console.error('[Webhook] Error setting webhook:', err.response?.data || err.message);
-  }
+// Telegram webhook endpoint (bot instance is created and webhook set in ./bot)
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+if (!TELEGRAM_BOT_TOKEN) {
+  console.error('❌ TELEGRAM_BOT_TOKEN not set. Bot webhook route will not be mounted.');
+} else {
+  app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
+    try { bot.processUpdate(req.body); } catch {}
+    res.sendStatus(200);
+  });
 }
 
-initWebhook();
 
-console.log('[Telegram Bot Initialized]');
-
-// ✅ Webhook endpoint for Telegram
-app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-
-// Parse raw body for signature verification
-app.use('/webhook', express.raw({ type: 'application/json' }));
-
-// Your Chapa secret for webhook verification
-const CHAPA_WEBHOOK_SECRET = process.env.CHAPA_WEBHOOK_SECRET;
-
-// Chapa secret for approval
-
-
-
-
+// Webhook raw body is applied only inside routes/payments.js
 
 // Root route
 const oneVsOneUserRouter = require('./routes/1v1user');
@@ -190,14 +159,11 @@ app.use((req, res) => res.status(404).json({ error: "Route not found" }));
 
 // --- HELPER FUNCTIONS ---
 
- 
 app.post("/send-notification", async (req, res) => {
   const { telegramId, message } = req.body;
-
   if (!telegramId || !message) {
     return res.status(400).json({ error: "telegramId and message are required" });
   }
-
   try {
     await bot.sendMessage(telegramId, message);
     return res.json({ success: true, telegramId, message });
@@ -207,25 +173,24 @@ app.post("/send-notification", async (req, res) => {
   }
 });
 
-// notification.js
-
 function sendTelegramMessage(telegramId, message) {
   if (!telegramId) {
     console.log(`[TELEGRAM] No telegramId provided, message not sent.`);
     return;
   }
-
-  bot.sendMessage(telegramId, message)
+  bot
+    .sendMessage(telegramId, message)
     .then(() => {
       console.log(`[TELEGRAM] ✅ Message sent successfully to ${telegramId}`);
     })
     .catch((err) => {
-      console.error(`[TELEGRAM] ❌ Failed to send message to ${telegramId}:`, err.message);
+      console.error(
+        `[TELEGRAM] ❌ Failed to send message to ${telegramId}:`,
+        err.message
+      );
     });
 }
 
-
-// Initialize new board (standard Ethiopian Dama start)
 function initializeNewBoard() {
   const board = Array(8)
     .fill(null)
@@ -239,7 +204,6 @@ function initializeNewBoard() {
   return board;
 }
 
-// Apply a move to a board (mutates board)
 function applyMoveToBoard(board, move) {
   const { from, to, capture } = move;
   board[to.row][to.col] = board[from.row][from.col];
@@ -247,37 +211,28 @@ function applyMoveToBoard(board, move) {
   if (capture) board[capture.row][capture.col] = null;
 }
 
-
-//result saver
-
 const GameResult = require("./models/Gameresult");
 
-/**
- * Save a game result to the database.
- *
- * @param {string} fixtureId - The ID of the fixture (match).
- * @param {string} player1Id - MongoDB ObjectId string for player 1.
- * @param {string|null} player2Id - MongoDB ObjectId string for player 2, or null if no opponent.
- * @param {number} winner - Number indicating winner: 0 = draw, 1 = player1 wins, 2 = player2 wins.
- * @param {Array} finalBoard - Final board state array.
- *
- * @throws Will throw an error if required data is missing or save fails.
- */
-async function saveGameResult(fixtureId, player1TelegramId, player2TelegramId, winner, finalBoard) {
+async function saveGameResult(
+  fixtureId,
+  player1TelegramId,
+  player2TelegramId,
+  winner,
+  finalBoard
+) {
   try {
-    const fixture = await Fixture.findById(fixtureId).populate('tournament');
-    if (!fixture) throw new Error('Fixture not found');
+    const fixture = await Fixture.findById(fixtureId).populate("tournament");
+    if (!fixture) throw new Error("Fixture not found");
 
     const tournamentUniqueId = fixture.tournament?.uniqueId || null;
 
-    // Fetch players by telegram_id (assuming IDs passed are telegram IDs)
     const player1 = await User.findOne({ telegram_id: player1TelegramId }).lean();
-    if (!player1) throw new Error('Player 1 not found');
+    if (!player1) throw new Error("Player 1 not found");
 
     let player2 = null;
     if (player2TelegramId) {
       player2 = await User.findOne({ telegram_id: player2TelegramId }).lean();
-      if (!player2) throw new Error('Player 2 not found');
+      if (!player2) throw new Error("Player 2 not found");
     }
 
     const gameResult = new GameResult({
@@ -293,16 +248,13 @@ async function saveGameResult(fixtureId, player1TelegramId, player2TelegramId, w
     });
 
     await gameResult.save();
-    console.log('Game result saved with tournamentUniqueId:', tournamentUniqueId);
+    console.log("Game result saved with tournamentUniqueId:", tournamentUniqueId);
   } catch (err) {
-    console.error('Error saving game result:', err);
+    console.error("Error saving game result:", err);
     throw err;
   }
 }
 
-
-
-// Check if a given piece at position can capture again
 function hasFurtherCapture(board, pos, player) {
   const directions = [
     { dr: -1, dc: -1 },
@@ -314,12 +266,11 @@ function hasFurtherCapture(board, pos, player) {
   const piece = board[pos.row][pos.col];
   if (!piece || piece.player !== player) return false;
 
-  // Allow all directions for capturing, regardless of king status
   for (const { dr, dc } of directions) {
     const enemyRow = pos.row + dr;
     const enemyCol = pos.col + dc;
     const jumpRow = pos.row + 2 * dr;
-    const jumpCol = pos.col + 2 * dc;
+    const jumpCol = pos.row + 2 * dc;
 
     if (
       enemyRow < 0 ||
@@ -337,14 +288,13 @@ function hasFurtherCapture(board, pos, player) {
     const landingSquare = board[jumpRow][jumpCol];
 
     if (enemyPiece && enemyPiece.player !== player && !landingSquare) {
-      return true; // Can still capture
+      return true;
     }
   }
 
   return false;
 }
 
-//game over checker function
 function hasAnyValidMoves(board, player) {
   const directions = [
     { dr: -1, dc: -1 },
@@ -353,7 +303,6 @@ function hasAnyValidMoves(board, player) {
     { dr: 1, dc: 1 },
   ];
 
-  // Helper to get valid moves for a piece at (r,c)
   function getValidMovesForPiece(r, c) {
     const p = board[r][c];
     if (!p || p.player !== player) return [];
@@ -361,7 +310,6 @@ function hasAnyValidMoves(board, player) {
     let moves = [];
 
     if (p.king) {
-      // King moves any distance diagonally
       for (const { dr, dc } of directions) {
         let rr = r + dr;
         let cc = c + dc;
@@ -410,7 +358,6 @@ function hasAnyValidMoves(board, player) {
         }
       }
     } else {
-      // Normal piece moves
       const captureDirs = directions;
       for (const { dr, dc } of captureDirs) {
         const r1 = r + dr,
@@ -433,9 +380,8 @@ function hasAnyValidMoves(board, player) {
           });
         }
       }
-      if (moves.length > 0) return moves; // must capture if possible
+      if (moves.length > 0) return moves;
 
-      // No captures: forward moves only
       const fwdDirs =
         player === 1
           ? [
@@ -462,7 +408,6 @@ function hasAnyValidMoves(board, player) {
     return moves;
   }
 
-  // Check all pieces for player
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       if (board[r][c] && board[r][c].player === player) {
@@ -473,104 +418,6 @@ function hasAnyValidMoves(board, player) {
 
   return false;
 }
-
-// Redis timer helpers
-async function getRoomTimer(fixtureId) {
-  try {
-    const val = await redisClient.get(`game:${fixtureId}:timer`);
-    return val !== null ? parseInt(val, 10) : null;
-  } catch (err) {
-    console.error("Redis getRoomTimer error:", err);
-    return null;
-  }
-}
-
-async function setRoomTimer(fixtureId, seconds) {
-  try {
-    await redisClient.set(
-      `game:${fixtureId}:timer`,
-      seconds,
-      "EX",
-      TIMER_DURATION
-    );
-  } catch (err) {
-    console.error("Redis setRoomTimer error:", err);
-  }
-}
-// --- PAIR WINNERS & CREATE MATCHES (with detailed logging) ---
-async function pairWinnersAndCreateMatches(tournamentUniqueId) {
-  if (!tournamentUniqueId) throw new Error('Invalid tournamentUniqueId format');
-
-  const tournament = await Tournament.findOne({ uniqueId: tournamentUniqueId });
-  if (!tournament) throw new Error('Tournament not found');
-
-  console.log(`\n=== Pair Winners & Create Matches for tournament ${tournamentUniqueId} ===`);
-
-  // Determine the last round with completed fixtures
-  const lastCompletedFixture = await Fixture.find({ tournament: tournament._id, status: 'completed' })
-    .sort({ round: -1 })
-    .limit(1)
-    .lean();
-
-  const lastCompletedRound = lastCompletedFixture.length > 0 ? lastCompletedFixture[0].round : 0;
-  const roundToPair = lastCompletedRound;
-
-  // Collect winners from that round
-  const completedFixtures = await Fixture.find({ tournament: tournament._id, round: roundToPair, status: 'completed' });
-  if (completedFixtures.length === 0) {
-    console.log(`[INFO] No completed fixtures found for round ${roundToPair}. Cannot pair winners.`);
-    return;
-  }
-
-  const winners = completedFixtures.map(f => (f.result === 1 ? f.player1.toString() : f.player2?.toString())).filter(Boolean);
-  const uniqueWinners = Array.from(new Set(winners));
-
-  console.log(`[INFO] Round ${roundToPair} winners:`, uniqueWinners);
-
-  if (uniqueWinners.length === 1) {
-    console.log(`[INFO] Tournament ${tournamentUniqueId} final winner: ${uniqueWinners[0]}`);
-    tournament.winner = uniqueWinners[0];
-    tournament.status = 'finished';
-    await tournament.save();
-
-    const winnerUser = await User.findById(uniqueWinners[0]);
-    if (winnerUser?.telegram_id) sendTelegramMessage(winnerUser.telegram_id, `🎉 Congratulations! You are the final winner!`);
-    return;
-  }
-
-  if (uniqueWinners.length < 2) {
-    console.log('[INFO] Not enough winners to create next round matches.');
-    return;
-  }
-
-  // Create next round fixtures
-  const nextRound = roundToPair + 1;
-  const newFixtures = [];
-
-  for (let i = 0; i < uniqueWinners.length; i += 2) {
-    const player1 = uniqueWinners[i];
-    const player2 = uniqueWinners[i + 1] || null;
-
-    const fixture = await Fixture.create({
-      tournament: tournament._id,
-      player1,
-      player2,
-      status: 'waiting',
-      round: nextRound,
-      board: [],
-    });
-
-    newFixtures.push(fixture._id);
-    console.log(`[INFO] Created Round ${nextRound} fixture ${fixture._id}: ${player1} vs ${player2 || 'BYE'}`);
-  }
-
-  tournament.fixtures.push(...newFixtures);
-  tournament.currentRound = nextRound;
-  await tournament.save();
-
-  console.log(`[INFO] Tournament ${tournamentUniqueId} updated with ${newFixtures.length} new fixtures for Round ${nextRound}`);
-}
-
 
 // --- HANDLE GAME OVER (with detailed logs and notifications) ---
 async function handleGameOver(fixtureId, winnerNumber, timeUp = false, finalBoard = []) {
@@ -1064,19 +911,33 @@ async function createChapaPayment(amount, user, phone) {
 
   return response.data.data.checkout_url; // Chapa checkout URL
 }
-app.post('/api/chapa-callback', async (req, res) => {
-  const { chatId, amount } = req.query;
-  const { status, tx_ref } = req.body; // depends on Chapa response
+app.post('/api/chapa-callback', express.json(), async (req, res) => {
+  const { trx_ref, ref_id, status } = req.body;
+  const chatId = req.query.chatId;
+
+  console.log(`[Chapa Callback] chatId=${chatId}, trx_ref=${trx_ref}, ref_id=${ref_id}, status=${status}`);
+
+  if (!chatId) return res.sendStatus(400);
+
+  const user = await getCachedUser(chatId, null);
+  if (!user) return res.sendStatus(404);
 
   if (status === 'success') {
-    const user = await User.findOne({ telegram_id: chatId });
-    if (user) {
-      user.oneVsOne_balance = (user.oneVsOne_balance || 0) + Number(amount);
-      await user.save();
-      bot.sendMessage(chatId, `✅ Payment successful! Your new 1v1 balance is ${user.oneVsOne_balance} Birr`);
-    }
-  } else {
-    bot.sendMessage(chatId, `❌ Payment failed. Please try again.`);
+    // Increase user balance
+    const deposit = await Withdraw.create({
+      userId: user._id,
+      chatId,
+      amount: req.body.amount || 0,
+      tx_ref: trx_ref,
+      status: 'success'
+    });
+
+    user.oneVsOne_balance += deposit.amount;
+    await user.save();
+
+    bot.sendMessage(chatId, `✅ Your deposit of ${deposit.amount} ETB was successful! Your new balance: ${user.oneVsOne_balance} ETB`);
+  } else if (status === 'failed') {
+    bot.sendMessage(chatId, `❌ Your deposit failed. Please try again.`);
   }
 
   res.sendStatus(200);
@@ -1085,77 +946,23 @@ app.post('/api/chapa-callback', async (req, res) => {
 
 
 
+app.use(express.json());
 
-// --- /api/withdraw with webhook-based status ---
-app.post('/api/withdraw', express.json(), async (req, res) => {
-  console.log('--- [API] /api/withdraw request received ---');
-  console.log('[API] Request body:', req.body);
-
-  const { name, phone, amount, account_number, bank_code, tx_ref, chatId } = req.body;
-
-  // 1️⃣ Save withdrawal in DB (status: pending)
-  let withdrawal;
-  try {
-    withdrawal = await Withdraw.create({
-      userId: null, // optional if linked to DB user
-      name,
-      phone,
-      amount,
-      account_number,
-      bank_code,
-      tx_ref,
-      chatId,
-      status: 'pending', // Always start as pending
-    });
-    console.log(`[API] Withdrawal saved in DB: tx_ref=${tx_ref}`);
-  } catch (err) {
-    console.error('[API] Error saving withdrawal in DB:', err.message);
-    return res.status(500).json({ success: false, message: 'Error saving withdrawal.' });
+// ✅ Chapa webhook
+app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const signature = req.headers['chapa-signature'];
+  if (!verifySignature(CHAPA_SECRET_KEY, req.body, signature)) {
+    return res.status(401).send('Invalid signature');
   }
 
-  // 2️⃣ Prepare Chapa payload
-  const payload = {
-    account_name: name,
-    account_number,
-    amount,
-    currency: 'ETB',
-    reference: tx_ref,
-    bank_code,
-  };
-  console.log('[API] Sending payload to Chapa:', payload);
+  const data = JSON.parse(req.body.toString('utf8'));
+  console.log('[Webhook] Data:', data);
 
-  // 3️⃣ Initiate Chapa transfer
-  try {
-    const chapaRes = await axios.post('https://api.chapa.co/v1/transfers', payload, {
-      headers: { Authorization: `Bearer ${CHAPA_SECRET_KEY}`, 'Content-Type': 'application/json' },
-    });
-    console.log('[API] Chapa transfer response:', chapaRes.data);
-
-    if (chapaRes.data.status === 'success') {
-      // ✅ Keep status as pending and wait for webhook
-      console.log(`[API] Withdrawal queued. Waiting for webhook notification: tx_ref=${tx_ref}`);
-      return res.json({
-        success: true,
-        message: `Withdrawal of ${amount} ETB queued. You will be notified once Chapa approves.`,
-        tx_ref,
-      });
-    } else {
-      withdrawal.status = 'failed';
-      await withdrawal.save();
-      console.log(`[API] Chapa transfer failed: tx_ref=${tx_ref}`);
-      return res.json({ success: false, message: 'Chapa transfer failed to queue.' });
-    }
-  } catch (err) {
-    withdrawal.status = 'failed';
-    await withdrawal.save();
-    console.error('[API] Error initiating Chapa transfer:', err.response?.data || err.message);
-    return res.json({ success: false, message: 'Server error during withdrawal.' });
-  }
+  res.sendStatus(200);
 });
 
-
-
-
+// ✅ View withdrawals
+app.get('/withdrawals', (req, res) => res.json(withdrawals));
 
 
 
@@ -1762,8 +1569,5 @@ dama.on('connection', (socket) => {
 
 
 
-
-// Start server
-server.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
-});
+// Start server (use same HTTP server as socket.io)
+server.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));

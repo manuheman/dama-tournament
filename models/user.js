@@ -7,7 +7,8 @@ const UserSchema = new mongoose.Schema({
   phone_number: { type: String, required: true },
   language: { type: String, enum: ['EN', 'AM'], default: 'EN' },
     chapaRecipientId: String,  // <-- add this
-  oneVsOne_balance: { type: Number, default: 0 } // Added 1v1 balance
+  oneVsOne_balance: { type: Number, default: 0 }, // Added 1v1 balance
+  oneVsOne_hold: { type: Number, default: 0 } // Funds reserved for in-progress withdrawals
 }, { timestamps: true }); // optional: adds createdAt and updatedAt
 
 module.exports = mongoose.model('User', UserSchema);
