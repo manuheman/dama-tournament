@@ -294,7 +294,7 @@ function getValidMoves(board, row, col) {
 const OneVOneResult = require('../models/1V1result');
 const User = require('../models/user');
 async function applyMove(roomId, move, playerId, io = null) {
-  console.log(`🔹 Player ${playerId} is attempting a move in room ${roomId}`, move);
+  console.log(`🔹 Player ${playerId} attempting move in room ${roomId}`, move);
 
   const gameState = await getGameState(roomId);
   if (!gameState) return { success: false, error: 'Game not started' };
@@ -314,49 +314,66 @@ async function applyMove(roomId, move, playerId, io = null) {
   if (gameState.currentTurn !== playerId) return { success: false, error: 'Not your turn' };
   if (gameState.board[to.row][to.col] !== null) return { success: false, error: 'Destination occupied' };
 
-  // --- Apply move ---
+  // --- Apply Move ---
   gameState.board[to.row][to.col] = piece;
   gameState.board[from.row][from.col] = null;
 
-  // --- Capture ---
+  // --- Capture Logic ---
   if (capture) {
     const captures = Array.isArray(capture) ? capture : [capture];
-    captures.forEach(c => (gameState.board[c.row][c.col] = null));
+    captures.forEach(c => {
+      if (gameState.board[c.row] && gameState.board[c.row][c.col]) {
+        gameState.board[c.row][c.col] = null;
+      }
+    });
 
-    // Check if multi-capture is possible
+    // Check if multi-capture possible
     const moreCaptures = getValidMoves(gameState.board, to.row, to.col).filter(m => m.capture);
     if (moreCaptures.length > 0) {
-      gameState.currentTurn = playerId; // same player keeps turn
+      gameState.currentTurn = playerId; // Same player continues
       await saveGameState(roomId, gameState);
+
+      if (io) {
+        io.to(roomId).emit('gameState', gameState);
+      }
+
+      console.log(`🔁 Multi-capture available for player ${playerId}`);
       return { success: true, gameState, multiCapture: true };
     }
   }
 
-  // --- King promotion ---
-  if (!piece.king && ((piece.player === 1 && to.row === 0) || (piece.player === 2 && to.row === 7))) {
+  // --- King Promotion ---
+  if (
+    !piece.king &&
+    ((piece.player === 1 && to.row === 0) ||
+      (piece.player === 2 && to.row === 7))
+  ) {
     piece.king = true;
     console.log(`👑 Player ${playerId}'s piece promoted to King at ${to.row},${to.col}`);
   }
 
-  // --- Switch turn ---
+  // --- Win Check ---
   const opponentId = Object.keys(gameState.colors).find(id => id !== playerId);
-  gameState.currentTurn = opponentId;
+  const opponentColor = gameState.colors[opponentId];
+  const opponentPieces = gameState.board.flat().filter(p => p && p.color === opponentColor);
 
-  // --- Win condition ---
-  const opponentPieces = gameState.board.flat().filter(p => p && p.color !== piece.color);
-  const opponentMoves = [];
+  // Collect possible moves for opponent
+  let opponentMoves = [];
   gameState.board.forEach((row, r) => {
     row.forEach((cell, c) => {
-      if (cell && cell.color !== piece.color) opponentMoves.push(...getValidMoves(gameState.board, r, c));
+      if (cell && cell.color === opponentColor) {
+        opponentMoves.push(...getValidMoves(gameState.board, r, c));
+      }
     });
   });
 
   let newBalance = 0;
 
+  // --- Win Condition ---
   if (opponentPieces.length === 0 || opponentMoves.length === 0) {
     gameState.status = 'finished';
     gameState.winner = playerId;
-    console.log(`🏆 Player ${playerId} wins!`);
+    console.log(`🏆 Player ${playerId} wins the match!`);
 
     try {
       const room = await getRoomDama1V1(roomId);
@@ -370,9 +387,9 @@ async function applyMove(roomId, move, playerId, io = null) {
         newBalance = winner.oneVsOne_balance;
       }
 
-      // Save match
       const playerIds = Object.keys(gameState.colors);
       const [p1, p2] = playerIds;
+
       await OneVOneResult.create({
         roomId,
         player1: { telegramId: p1, result: p1 === playerId ? 'win' : 'lose' },
@@ -381,7 +398,6 @@ async function applyMove(roomId, move, playerId, io = null) {
         totalStake: stake
       });
 
-      // Notify clients
       if (io) {
         io.to(roomId).emit('gameOver', {
           winnerId: playerId,
@@ -391,17 +407,31 @@ async function applyMove(roomId, move, playerId, io = null) {
         });
       }
 
-      // Delete finished game
       await deleteRoomDama1V1(roomId);
     } catch (err) {
-      console.error(`❌ Finalizing game failed:`, err);
+      console.error(`❌ Error while finalizing match for ${roomId}:`, err);
     }
   } else {
+    // --- Normal Turn Swap ---
+    gameState.currentTurn = opponentId;
     await saveGameState(roomId, gameState);
+
+    // ✅ Instantly broadcast updated state
+    if (io) {
+      io.to(roomId).emit('gameState', gameState);
+      io.to(roomId).emit('turnTimerUpdate', {
+        timeLeft: 30,
+        currentTurn: opponentId
+      });
+    }
+
+    console.log(`🔄 Turn swapped to ${opponentId}`);
   }
 
   return { success: true, gameState, newBalance };
 }
+
+
 
 module.exports = {
   

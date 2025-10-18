@@ -1,18 +1,15 @@
 const mongoose = require('mongoose');
 
-const WithdrawSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+const withdrawalSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   amount: { type: Number, required: true },
+  method: { type: String, enum: ['Telebirr', 'mpesa', 'cbe'], required: true },
   phone: { type: String, required: true },
-  channel: { type: String, enum: ['MOBILE_MONEY', 'BANK'], default: 'MOBILE_MONEY' },
-  wallet: { type: String }, // e.g., TELEBIRR, CBE_BIRR, MPESA
-  status: { type: String, required: true, enum: ['pending', 'success', 'failed'], default: 'pending' },
-  tx_ref: { type: String, required: true, unique: true, index: true },
-  provider: { type: String, default: 'chapa' },
-  provider_ref: { type: String },
-  meta: { type: Object, default: {} },
-  processedAt: { type: Date },
-  failureReason: { type: String },
+  status: { type: String, enum: ['pending', 'processing', 'success', 'failed'], default: 'pending' },
+  reference: { type: String },
+  providerTxnId: { type: String },
+  responseData: { type: mongoose.Schema.Types.Mixed },
+  webhookData: { type: mongoose.Schema.Types.Mixed }
 }, { timestamps: true });
 
-module.exports = mongoose.model('Withdraw', WithdrawSchema);
+module.exports = mongoose.model('Withdrawal', withdrawalSchema);

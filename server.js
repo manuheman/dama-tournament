@@ -2,7 +2,7 @@ const dotenv = require("dotenv");
 dotenv.config();
 require('dotenv').config(); // MUST be first
 
-
+const axios = require("axios"); // Only needed for direct B2C execution
 const express = require("express");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
@@ -14,8 +14,7 @@ const Fixture = require("./models/fixture");  // adjust path as needed
 const User = require('./models/user'); // adjust path as needed
 const Tournament = require('./models/tournament')
 const Withdraw = require('./models/withdraw'); // adjust path if needed
-const paymentsRouter = require('./routes/payments');
-const withdrawalsRouter = require('./routes/withdrawals');
+
 const PORT = process.env.PORT || 3000;
 
 const redisHelper = require('./utils/redisHelper');
@@ -91,8 +90,8 @@ app.use(express.static(path.join(__dirname, "public")));
 
 
 // Decoupled payments/withdrawals routers
-app.use("/api", paymentsRouter);
-app.use('/api', withdrawalsRouter);
+
+
 
 // Telegram webhook endpoint (bot instance is created and webhook set in ./bot)
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -104,7 +103,6 @@ if (!TELEGRAM_BOT_TOKEN) {
     res.sendStatus(200);
   });
 }
-
 
 // Webhook raw body is applied only inside routes/payments.js
 
@@ -151,7 +149,8 @@ app.use("/api/admin/tournaments", require("./routes/tournaments"));
 app.use("/api/admin/fixtures", require("./routes/fixtures"));
 app.use("/api/user", require("./routes/users"));
 app.use('/api/admin/game-results', require('./routes/game-results'));
-
+app.use('/api/withdrawal', require('./routes/withdrawal'));
+app.use('/api/deposit', require('./routes/deposit'));
 
 
 // 404 fallback
@@ -294,6 +293,8 @@ function hasFurtherCapture(board, pos, player) {
 
   return false;
 }
+
+
 
 function hasAnyValidMoves(board, player) {
   const directions = [
@@ -846,123 +847,15 @@ async function startTurnTimer(fixtureId) {
 }
 
 
-//arif pay
-app.get("/payment-callback", async (req, res) => {
-  const { chatId, tournamentType, sessionId } = req.query;
-
-  try {
-    const status = await arifpay.Check_payment_status(sessionId);
-
-    if (!status.error && status.data.status === "success") {
-      // Payment succeeded, register user
-      const user = await User.findOne({ telegram_id: chatId });
-      const typeDefaults = {
-        Silver: { balance: 50, maxPlayers: 8 },
-        Gold: { balance: 100, maxPlayers: 32 },
-        Platinum: { balance: 200, maxPlayers: 64 },
-      };
-      const { balance, maxPlayers } = typeDefaults[tournamentType];
-
-      let tournament = await Tournament.findOne({ type: tournamentType, status: 'open' }).populate('players');
-
-      if (tournament) {
-        tournament.players.push(user._id);
-        if (tournament.players.length >= tournament.maxPlayers) tournament.status = 'full';
-        await tournament.save();
-      } else {
-        tournament = new Tournament({ type: tournamentType, balance, maxPlayers, players: [user._id] });
-        await tournament.save();
-      }
-
-      // Notify user via bot
-      bot.sendMessage(chatId, `🎉 Payment successful! You are registered for the ${tournamentType} Tournament.\n` +
-        `💰 Entry: ${tournament.balance} Birr\n👥 Players: ${tournament.players.length}/${tournament.maxPlayers}\n` +
-        `🏷️ Tournament Code: ${tournament.uniqueId}`
-      );
-
-      res.send("Payment confirmed and registration complete!");
-    } else {
-      res.send("Payment is pending or failed.");
-    }
-  } catch (err) {
-    console.error("Payment callback error:", err);
-    res.status(500).send("Error verifying payment");
-  }
-});
 
 
 
-
-async function createChapaPayment(amount, user, phone) {
-  const payload = {
-    amount: amount,
-    currency: 'ETB',
-    email: user.email || 'guest@example.com',
-    first_name: user.name,
-    last_name: '',
-    tx_ref: `1v1-${user.telegram_id}-${Date.now()}`,
-    phone_number: phone,
-    callback_url: `${NGROK_URL}/api/chapa-callback?chatId=${user.telegram_id}&amount=${amount}`
-  };
-
-  const response = await axios.post('https://api.chapa.co/v1/transaction/initialize', payload, {
-    headers: { Authorization: `Bearer ${CHAPA_API_KEY}` }
-  });
-
-  return response.data.data.checkout_url; // Chapa checkout URL
-}
-app.post('/api/chapa-callback', express.json(), async (req, res) => {
-  const { trx_ref, ref_id, status } = req.body;
-  const chatId = req.query.chatId;
-
-  console.log(`[Chapa Callback] chatId=${chatId}, trx_ref=${trx_ref}, ref_id=${ref_id}, status=${status}`);
-
-  if (!chatId) return res.sendStatus(400);
-
-  const user = await getCachedUser(chatId, null);
-  if (!user) return res.sendStatus(404);
-
-  if (status === 'success') {
-    // Increase user balance
-    const deposit = await Withdraw.create({
-      userId: user._id,
-      chatId,
-      amount: req.body.amount || 0,
-      tx_ref: trx_ref,
-      status: 'success'
-    });
-
-    user.oneVsOne_balance += deposit.amount;
-    await user.save();
-
-    bot.sendMessage(chatId, `✅ Your deposit of ${deposit.amount} ETB was successful! Your new balance: ${user.oneVsOne_balance} ETB`);
-  } else if (status === 'failed') {
-    bot.sendMessage(chatId, `❌ Your deposit failed. Please try again.`);
-  }
-
-  res.sendStatus(200);
-});
 
 
 
 
 app.use(express.json());
 
-// ✅ Chapa webhook
-app.post('/webhook', express.raw({ type: 'application/json' }), (req, res) => {
-  const signature = req.headers['chapa-signature'];
-  if (!verifySignature(CHAPA_SECRET_KEY, req.body, signature)) {
-    return res.status(401).send('Invalid signature');
-  }
-
-  const data = JSON.parse(req.body.toString('utf8'));
-  console.log('[Webhook] Data:', data);
-
-  res.sendStatus(200);
-});
-
-// ✅ View withdrawals
-app.get('/withdrawals', (req, res) => res.json(withdrawals));
 
 
 
@@ -1352,6 +1245,127 @@ const BOARD_SIZE = 8;
 // ---------------------------
 // Socket Connections
 // ---------------------------
+// =====================
+// TURN TIMER (1v1 Dama)
+// =====================
+// =====================
+// TURN TIMER (1v1 Dama)
+// =====================
+const roomTimers = new Map();
+
+/**
+ * Start or continue the turn timer for a room.
+ * Automatically swaps turns when time runs out.
+ */
+async function startTurnTimer1V1(roomId, io) {
+  // Clear any existing timer for safety
+  if (roomTimers.has(roomId)) {
+    clearInterval(roomTimers.get(roomId));
+    roomTimers.delete(roomId);
+  }
+
+  let timeLeft = 30; // default turn time
+
+  const interval = setInterval(async () => {
+    try {
+      // Fetch latest room state
+      const room = await getRoomDama1V1(roomId);
+      if (!room || !room.gameState) {
+        console.log(`❌ Timer stopped: Room ${roomId} not active`);
+        clearInterval(interval);
+        roomTimers.delete(roomId);
+        return;
+      }
+
+      // Only run timer if game is started
+      if (room.gameState.status !== 'started') return;
+
+      // Decrease timer
+      timeLeft--;
+      room.gameState.turnTime = timeLeft;
+
+      // Save updated game state
+      await saveGameState(roomId, room.gameState);
+
+      // Notify clients of timer
+      io.to(roomId).emit('turnTimerUpdate', {
+        timeLeft,
+        currentTurn: room.gameState.currentTurn
+      });
+
+      // -----------------------------
+      // Handle timeout
+      // -----------------------------
+      if (timeLeft <= 0) {
+        const currentPlayer = room.gameState.currentTurn;
+        const opponent = Object.keys(room.gameState.colors).find(id => id !== currentPlayer);
+
+        console.log(`⏰ Player ${currentPlayer} ran out of time in room ${roomId}. Swapping turn to ${opponent}`);
+
+        // Swap turn to opponent
+        room.gameState.currentTurn = opponent;
+        room.gameState.turnTime = 30; // reset timer
+
+        // Save updated game state
+        await saveGameState(roomId, room.gameState);
+
+        // Emit timeout event
+        io.to(roomId).emit('turnTimeout', {
+          previousPlayer: currentPlayer,
+          nextPlayer: opponent,
+          message: `⏰ Player ${currentPlayer} ran out of time. Turn passed to ${opponent}`
+        });
+
+        // 🔹 Emit full game state so front-end re-renders board automatically
+        io.to(roomId).emit('gameState', room.gameState);
+
+        // Restart timer for next player
+        clearInterval(interval);
+        roomTimers.delete(roomId);
+        startTurnTimer1V1(roomId, io);
+      }
+    } catch (err) {
+      console.error(`❌ Error in turn timer for room ${roomId}:`, err);
+      clearInterval(interval);
+      roomTimers.delete(roomId);
+    }
+  }, 1000);
+
+  // Save interval reference
+  roomTimers.set(roomId, interval);
+}
+
+/**
+ * Reset turn timer manually (called after a valid player move)
+ */
+async function resetTurnTimer1V1(roomId, io) {
+  console.log(`🔄 Resetting turn timer for room ${roomId}`);
+
+  // Clear existing timer
+  if (roomTimers.has(roomId)) {
+    clearInterval(roomTimers.get(roomId));
+    roomTimers.delete(roomId);
+  }
+
+  const room = await getRoomDama1V1(roomId);
+  if (!room || !room.gameState || room.gameState.status !== 'started') return;
+
+  // Reset timer for current player
+  room.gameState.turnTime = 30;
+  await saveGameState(roomId, room.gameState);
+
+  // 🔹 NEW: Emit the updated game state so both players see changes immediately
+  io.to(roomId).emit('gameState', room.gameState);
+
+  // Start a new timer
+  startTurnTimer1V1(roomId, io);
+}
+
+
+
+// =====================
+// SOCKET CONNECTION
+// =====================
 dama.on('connection', (socket) => {
   console.log(`✅ Player connected: ${socket.id}`);
 
@@ -1359,37 +1373,39 @@ dama.on('connection', (socket) => {
   // Join Game Room
   // -----------------------
   socket.on('joinGameRoom', async ({ roomId, playerId, userName }) => {
-    console.log(`🔹 Player ${playerId} attempting to join room ${roomId}`);
     try {
       socket.join(roomId);
 
       const { room, created, error } = await createOrJoinRoomDama1V1(roomId, playerId, 0, userName);
       if (error) return socket.emit('errorMessage', error);
 
-      // Initialize game state only if room is newly created
       if (created) {
         room.gameState = {
           board: initializeBoard(),
           colors: { [playerId]: 'red' },
-          currentTurn: playerId, // first player starts
+          currentTurn: playerId,
           status: 'waiting',
-          winner: null
+          winner: null,
+          turnTime: 30
         };
       } else {
-        // Existing room, ensure player color is assigned
         room.gameState.colors = room.gameState.colors || {};
         if (!room.gameState.colors[playerId]) {
           room.gameState.colors[playerId] = Object.values(room.gameState.colors).includes('red') ? 'green' : 'red';
         }
-        // ✅ Do NOT overwrite currentTurn
       }
 
       // Start game if 2 players
       if (room.players.length === 2 && room.gameState.status !== 'started') {
         room.gameState.status = 'started';
+        await saveGameState(roomId, room.gameState);
+
+        // Start first turn timer
+        await startTurnTimer1V1(roomId, dama);
+      } else {
+        await saveGameState(roomId, room.gameState);
       }
 
-      await saveGameState(roomId, room.gameState);
       dama.to(roomId).emit('gameState', room.gameState);
 
     } catch (err) {
@@ -1399,172 +1415,164 @@ dama.on('connection', (socket) => {
   });
 
   // -----------------------
-  // Player leaves / disconnect
-  // -----------------------
-  const handlePlayerLeave = async (roomId, playerId) => {
-    try {
-      const room = await getRoomDama1V1(roomId);
-      if (!room) return;
-
-      console.log(`🛑 Player ${playerId} leaving room ${roomId}`);
-      room.players = room.players.filter(p => p !== playerId);
-      delete room.gameState.colors[playerId];
-
-      if (room.players.length === 0) {
-        await deleteRoomDama1V1(roomId);
-        console.log(`⚠️ Room ${roomId} deleted (empty)`);
-      } else {
-        if (room.gameState.currentTurn === playerId) room.gameState.currentTurn = room.players[0];
-        await saveGameState(roomId, room.gameState);
-        dama.to(roomId).emit('gameState', room.gameState);
-      }
-
-      socket.to(roomId).emit('playerLeft', { playerId });
-    } catch (err) {
-      console.error(`❌ handlePlayerLeave error for player ${playerId} in room ${roomId}:`, err);
-    }
-  };
-
-  // -----------------------
-  // Player Move Handler
+  // Player Move
   // -----------------------
   const OneVOneResult = require('./models/1V1result');
   const User = require('./models/user');
   const stakePercentage = 0.9; // 10% fee applied
 
-  socket.on('playerMove', async ({ roomId, playerId, fromRow, fromCol, toRow, toCol, captured }) => {
-    console.log(`🎲 PlayerMove received from ${playerId} in room ${roomId}`, { fromRow, fromCol, toRow, toCol, captured });
+socket.on('playerMove', async ({ roomId, playerId, fromRow, fromCol, toRow, toCol, captured }) => {
+  try {
+    console.log(`🎯 Player ${playerId} made a move in room ${roomId}`);
 
-    try {
-      const move = {
-        from: { row: fromRow, col: fromCol },
-        to: { row: toRow, col: toCol },
-        capture: captured ? { row: captured[0], col: captured[1] } : null
-      };
+    const move = {
+      from: { row: fromRow, col: fromCol },
+      to: { row: toRow, col: toCol },
+      capture: captured ? { row: captured[0], col: captured[1] } : null
+    };
 
-      // Apply move using centralized function
-      const { success, gameState, error } = await applyMove(roomId, move, playerId, dama);
-      if (!success) {
-        console.log(`❌ applyMove failed: ${error}`);
-        return socket.emit('errorMessage', error);
+    // Apply the move logic
+    const { success, gameState, multiCapture, error } = await applyMove(roomId, move, playerId, dama);
+    if (!success) {
+      console.warn(`⚠️ Invalid move by ${playerId}: ${error}`);
+      return socket.emit('errorMessage', error);
+    }
+
+    // Fetch latest room
+    const room = await getRoomDama1V1(roomId);
+    if (!room) return console.warn(`⚠️ Room ${roomId} not found after move`);
+
+    // Update room gameState
+    room.gameState = gameState;
+
+    // -----------------------------
+    // Swap turn & reset timer
+    // -----------------------------
+    if (gameState.status === 'started' && !multiCapture) {
+      const nextPlayer = Object.keys(room.gameState.colors).find(id => id !== playerId);
+      room.gameState.currentTurn = nextPlayer;
+      console.log(`🔄 Turn swapped: ${playerId} ➜ ${nextPlayer}`);
+
+      await saveGameState(roomId, room.gameState);
+
+      // Reset turn timer — client will refresh page on reset
+      await resetTurnTimer1V1(roomId, dama);
+    } else if (multiCapture) {
+      console.log(`🔁 Multi-capture — ${playerId} keeps the turn`);
+      await saveGameState(roomId, room.gameState);
+    }
+
+    // -----------------------------
+    // Broadcast updated game state
+    // -----------------------------
+    dama.to(roomId).emit('gameState', room.gameState);
+    console.log('📡 Updated gameState broadcasted successfully');
+
+    // -----------------------------
+    // Handle game finish
+    // -----------------------------
+    if (gameState.status === 'finished' && gameState.winner) {
+      const stake = room?.betAmount || 0;
+      const winningAmount = stake * 2 * 0.9; // 10% fee
+      const winnerId = gameState.winner;
+
+      console.log(`🏁 Game finished! Winner: ${winnerId}`);
+
+      // Update winner balance
+      const winnerUser = await User.findOne({ telegramId: winnerId });
+      let newBalance = null;
+      if (winnerUser) {
+        winnerUser.oneVsOne_balance = (winnerUser.oneVsOne_balance || 0) + winningAmount;
+        await winnerUser.save();
+        newBalance = winnerUser.oneVsOne_balance;
+        console.log(`💰 Updated winner balance: ${newBalance}`);
       }
 
-      // Broadcast updated game state
-      dama.to(roomId).emit('gameState', gameState);
-      console.log(`✅ Move applied for player ${playerId}: (${fromRow},${fromCol}) -> (${toRow},${toCol})`);
-
-      // ------------------------
-      // Handle Game Finished
-      // ------------------------
-      if (gameState.status === 'finished' && gameState.winner) {
-        console.log(`🏆 Game finished in room ${roomId}. Winner: ${gameState.winner}`);
-
-        // Safely fetch the room
-        const room = await getRoomDama1V1(roomId);
-        if (!room) {
-          console.warn(`⚠️ Room ${roomId} not found (possibly already deleted)`);
-          return;
-        }
-
-        const stake = room?.betAmount || 0;
-        const winningAmount = stake * 2 * stakePercentage; // 10% fee applied via stakePercentage
-
-        // ✅ Update winner's balance in DB
-        const winnerUser = await User.findOne({ telegramId: gameState.winner });
-        let newBalance = null;
-        if (winnerUser) {
-          winnerUser.oneVsOne_balance = (winnerUser.oneVsOne_balance || 0) + winningAmount;
-          await winnerUser.save();
-          newBalance = winnerUser.oneVsOne_balance;
-          console.log(`💰 Updated winner balance: ${newBalance}`);
-        }
-
-        // ✅ Save game result only if room has players
-        if (room.players && room.players.length === 2) {
-          await OneVOneResult.create({
-            roomId,
-            player1: { id: room.players[0], name: room.players[0] },
-            player2: { id: room.players[1], name: room.players[1] },
-            winner: gameState.winner,
-            totalStake: stake * 2,
-          });
-        }
-
-        // ✅ Emit gameOver event
-        dama.to(roomId).emit('gameOver', {
-          winnerId: gameState.winner,
-          message: `🏆 Player ${gameState.winner} wins!`,
-          winningAmount,
-          newBalance
+      // Record match result
+      if (room.players.length === 2) {
+        await OneVOneResult.create({
+          roomId,
+          player1: { id: room.players[0], name: room.players[0] },
+          player2: { id: room.players[1], name: room.players[1] },
+          winner: winnerId,
+          totalStake: stake * 2
         });
-        console.log(`📣 gameOver event emitted to room ${roomId} with newBalance: ${newBalance}`);
-
-        // ✅ Delete room from Redis after game finished
-        await deleteRoomDama1V1(roomId);
-        console.log(`🗑️ Room ${roomId} deleted from Redis after game finished`);
       }
 
-    } catch (err) {
-      console.error(`❌ playerMove error for ${playerId} in room ${roomId}:`, err);
-      socket.emit('errorMessage', 'Internal server error');
+      // Notify clients
+      dama.to(roomId).emit('gameOver', {
+        winnerId,
+        message: `🏆 Player ${winnerId} wins!`,
+        winningAmount,
+        newBalance
+      });
+
+      // Cleanup
+      if (roomTimers.has(roomId)) {
+        clearInterval(roomTimers.get(roomId));
+        roomTimers.delete(roomId);
+      }
+      await deleteRoomDama1V1(roomId);
+      console.log(`🧹 Room ${roomId} cleaned up after game end`);
     }
-  });
+
+  } catch (err) {
+    console.error(`❌ playerMove error in room ${roomId}:`, err);
+    socket.emit('errorMessage', 'Internal server error');
+  }
+});
+
+
 
   // -----------------------
-  // Graceful Disconnect
+  // Player Disconnect / Leave
   // -----------------------
-  const disconnectedPlayers = {}; // { playerId: timeoutId }
-
   socket.on('dislink', async ({ roomId, playerId }) => {
-    try {
-      const leavingPlayerId = playerId || socket.id;
+    const leavingPlayerId = playerId || socket.id;
 
-      // If roomId not provided, find all rooms containing this player
-      const targetRooms = roomId
-        ? [{ roomId }]
-        : (await getAllRoomsDama1V1())
-            .filter(r => r.players.includes(leavingPlayerId))
-            .map(r => ({ roomId: r.roomId }));
+    const targetRooms = roomId
+      ? [{ roomId }]
+      : (await getAllRoomsDama1V1())
+          .filter(r => r.players.includes(leavingPlayerId))
+          .map(r => ({ roomId: r.roomId }));
 
-      for (const r of targetRooms) {
-        const room = await getRoomDama1V1(r.roomId);
-        if (!room) continue;
+    for (const r of targetRooms) {
+      const room = await getRoomDama1V1(r.roomId);
+      if (!room) continue;
 
-        if (room.gameState.status === 'finished' || room.gameState.winner) {
-          console.log(`🛑 Player ${leavingPlayerId} leaving room ${r.roomId} (game finished)`);
-          room.players = room.players.filter(p => p !== leavingPlayerId);
-          delete room.gameState.colors[leavingPlayerId];
+      if (room.gameState.status === 'finished' || room.gameState.winner) {
+        room.players = room.players.filter(p => p !== leavingPlayerId);
+        delete room.gameState.colors[leavingPlayerId];
 
-          if (room.players.length === 0) {
-            await deleteRoomDama1V1(r.roomId);
-            console.log(`⚠️ Room ${r.roomId} deleted (empty)`);
-          } else {
-            await saveGameState(r.roomId, room.gameState);
-            dama.to(r.roomId).emit('gameState', room.gameState);
+        if (room.players.length === 0) {
+          if (roomTimers.has(r.roomId)) {
+            clearInterval(roomTimers.get(r.roomId));
+            roomTimers.delete(r.roomId);
           }
-
-          socket.to(r.roomId).emit('playerLeft', { playerId: leavingPlayerId });
+          await deleteRoomDama1V1(r.roomId);
         } else {
-          console.log(`⚠️ Player ${leavingPlayerId} disconnected but remains in room ${r.roomId} (game ongoing)`);
-          dama.to(r.roomId).emit('playerDisconnected', { playerId: leavingPlayerId });
+          await saveGameState(r.roomId, room.gameState);
+          dama.to(r.roomId).emit('gameState', room.gameState);
         }
+
+        socket.to(r.roomId).emit('playerLeft', { playerId: leavingPlayerId });
+      } else {
+        dama.to(r.roomId).emit('playerDisconnected', { playerId: leavingPlayerId });
       }
-    } catch (err) {
-      console.error(`❌ dislink error for player ${playerId || socket.id}:`, err);
     }
   });
 
   // -----------------------
-  // Reconnect handler
+  // Reconnect Player
   // -----------------------
+  const disconnectedPlayers = {};
   socket.on('reconnectPlayer', ({ roomId, playerId }) => {
     if (disconnectedPlayers[playerId]) {
       clearTimeout(disconnectedPlayers[playerId]);
       delete disconnectedPlayers[playerId];
-      console.log(`🔹 Player ${playerId} reconnected, canceling scheduled leave`);
+      console.log(`🔹 Player ${playerId} reconnected`);
     }
   });
-
 });
 
 

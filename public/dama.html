@@ -6,37 +6,34 @@
   <link rel="stylesheet" href="dama.css">
 </head>
 <body>
+  <!-- Header -->
   <div class="game-header">
     <div class="players-bar">
       <div class="player-pill you"><span class="dot"></span> You</div>
+      <div class="vs-pill">VS</div>
       <div class="player-pill opp"><span class="dot"></span> Opponent</div>
     </div>
-
     <div class="header-info">
-      
       <div class="stake-display" id="stakeDisplay">Stake: 0 birr</div>
-        <div class="possible-win" id="possibleWin">Possible Win: 0 birr</div> 
+      <div class="possible-win" id="possibleWin">Possible Win: 0 birr</div>
     </div>
   </div>
 
-  <div id="turn-indicator">Player 1's Turn</div>
-
+  <!-- Game Board -->
   <div class="game-shell">
     <div class="board-wrap">
       <div id="board"></div>
+
+      <!-- Turn indicator & Timer below the board -->
+      <div class="bottom-info">
+        <div id="turn-indicator">Player 1's Turn</div>
+        <div id="turn-timer">30s</div>
+      </div>
     </div>
   </div>
 
-  <div class="controls">
-    <button id="restartBtn" class="btn"></button>
-  </div>
-<!-- Add this in the <head> or just before dama.js -->
-<script src="/socket.io/socket.io.js"></script>
-<script src="dama.js"></script>
 
-  <script>
-    // Get stake from URL and display it
- 
-  </script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="dama.js"></script>
 </body>
 </html>
