@@ -2,9 +2,6 @@ const dotenv = require("dotenv");
 dotenv.config();
 require('dotenv').config(); // MUST be first
 
-const crypto = require ('crypto');
-const CHAPA_API_KEY = process.env.CHAPA_API_KEY
-
 
 const express = require("express");
 const mongoose = require("mongoose");
@@ -12,12 +9,14 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const http = require("http");
 const { Server } = require("socket.io");
-const bot = require("./bot");
+const bot  = require('./bot');
 const Fixture = require("./models/fixture");  // adjust path as needed
 const User = require('./models/user'); // adjust path as needed
 const Tournament = require('./models/tournament')
 const Withdraw = require('./models/withdraw'); // adjust path if needed
-const paymentRoutes = require('./routes/PaymentRoutes');
+const paymentsRouter = require('./routes/payments');
+const withdrawalsRouter = require('./routes/withdrawals');
+const { startScheduler: startReconcileScheduler } = require('./services/reconcile');
 const PORT = process.env.PORT || 3000;
 
 const redisHelper = require('./utils/redisHelper');
@@ -52,6 +51,8 @@ const {
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const socketUtil = require('./utils/socket');
+socketUtil.init(io);
 // ====== Constants ======
 const TURN_TIME = 30; // seconds per turn (adjust as needed)
 
@@ -60,89 +61,54 @@ const TIMER_DURATION = 600; // 10 minutes in seconds
 
 // MongoDB connection
 mongoose
-  .connect(
-    process.env.MONGO_URL || "mongodb://localhost:27017/my_node_project",
-    {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    }
-  )
+  .connect(process.env.MONGO_URL || "mongodb://localhost:27017/my_node_project")
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 // Middleware
-app.use(bodyParser.json());
-app.use(express.json()); // must be BEFORE routes
+// Preserve rawBody for HMAC verification routes (Chapa webhooks/approvals)
+app.use(bodyParser.json({
+  verify: (req, res, buf) => {
+    try { req.rawBody = Buffer.from(buf); } catch {}
+  }
+}));
+// app.use(express.json()); // bodyParser.json handles JSON and preserves raw body
 app.use(express.static(path.join(__dirname, "public")));
 
 
-app.use("/api", paymentRoutes);
+// Decoupled payments/withdrawals routers
+app.use("/api", paymentsRouter);
+app.use('/api', withdrawalsRouter);
 
-// Telegram bot webhook
-
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-
-// ✅ Load token & ngrok url from env
-const TELEGRAM_BOT_TOKEN =
-  process.env.TELEGRAM_BOT_TOKEN || '7707852242:AAFj5rrpS82yaUZHfbM6QqA7RZMji1d5HIo';
-const NGROK_URL =
-  process.env.NGROK_URL || 'https://36a805478122.ngrok-free.app';
-// ✅ Initialize bot (Express will handle requests)
-global.bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { webHook: true });
-
-// ✅ Function to set webhook only once
-async function initWebhook() {
-  try {
-    const url = `${NGROK_URL}/bot${TELEGRAM_BOT_TOKEN}`;
-
-    // check existing webhook
-    const res = await axios.get(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo`
-    );
-
-    if (res.data.result.url !== url) {
-      // set webhook if not already set
-      await axios.post(
-        `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook`,
-        { url }
-      );
-      console.log(`[Webhook] Set to: ${url}`);
-    } else {
-      console.log(`[Webhook] Already set to: ${url}`);
-    }
-  } catch (err) {
-    console.error('[Webhook] Error setting webhook:', err.response?.data || err.message);
-  }
+// Telegram webhook endpoint (bot instance is created and webhook set in ./bot)
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+if (!TELEGRAM_BOT_TOKEN) {
+  console.error('❌ TELEGRAM_BOT_TOKEN not set. Bot webhook route will not be mounted.');
+} else {
+  app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
+    try { bot.processUpdate(req.body); } catch {}
+    res.sendStatus(200);
+  });
 }
 
-initWebhook();
 
-console.log('[Telegram Bot Initialized]');
-
-// ✅ Webhook endpoint for Telegram
-app.post(`/bot${TELEGRAM_BOT_TOKEN}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-
-// Parse raw body for signature verification
-app.use('/webhook', express.raw({ type: 'application/json' }));
-
-// Your Chapa secret for webhook verification
-const CHAPA_WEBHOOK_SECRET = process.env.CHAPA_WEBHOOK_SECRET;
-
-// Chapa secret for approval
-
-
-
-
+// Webhook raw body is applied only inside routes/payments.js
 
 // Root route
 const oneVsOneUserRouter = require('./routes/1v1user');
 app.use('/1v1user', oneVsOneUserRouter);
 app.get("/", (req, res) => res.send("✅ Node.js Server is running"));
+
+// Socket.io: join room per telegram_id for live balance updates
+io.on('connection', (socket) => {
+  try {
+    const telegramId = socket.handshake.query?.telegramId;
+    if (telegramId) {
+      socket.join(`tg:${String(telegramId)}`);
+      console.log('[socket] joined user room', telegramId);
+    }
+  } catch {}
+});
 
 // Static admin routes
 app.get("/admin/user", (req, res) =>
@@ -190,14 +156,11 @@ app.use((req, res) => res.status(404).json({ error: "Route not found" }));
 
 // --- HELPER FUNCTIONS ---
 
- 
 app.post("/send-notification", async (req, res) => {
   const { telegramId, message } = req.body;
-
   if (!telegramId || !message) {
     return res.status(400).json({ error: "telegramId and message are required" });
   }
-
   try {
     await bot.sendMessage(telegramId, message);
     return res.json({ success: true, telegramId, message });
@@ -207,25 +170,24 @@ app.post("/send-notification", async (req, res) => {
   }
 });
 
-// notification.js
-
 function sendTelegramMessage(telegramId, message) {
   if (!telegramId) {
     console.log(`[TELEGRAM] No telegramId provided, message not sent.`);
     return;
   }
-
-  bot.sendMessage(telegramId, message)
+  bot
+    .sendMessage(telegramId, message)
     .then(() => {
       console.log(`[TELEGRAM] ✅ Message sent successfully to ${telegramId}`);
     })
     .catch((err) => {
-      console.error(`[TELEGRAM] ❌ Failed to send message to ${telegramId}:`, err.message);
+      console.error(
+        `[TELEGRAM] ❌ Failed to send message to ${telegramId}:`,
+        err.message
+      );
     });
 }
 
-
-// Initialize new board (standard Ethiopian Dama start)
 function initializeNewBoard() {
   const board = Array(8)
     .fill(null)
@@ -239,7 +201,6 @@ function initializeNewBoard() {
   return board;
 }
 
-// Apply a move to a board (mutates board)
 function applyMoveToBoard(board, move) {
   const { from, to, capture } = move;
   board[to.row][to.col] = board[from.row][from.col];
@@ -247,37 +208,28 @@ function applyMoveToBoard(board, move) {
   if (capture) board[capture.row][capture.col] = null;
 }
 
-
-//result saver
-
 const GameResult = require("./models/Gameresult");
 
-/**
- * Save a game result to the database.
- *
- * @param {string} fixtureId - The ID of the fixture (match).
- * @param {string} player1Id - MongoDB ObjectId string for player 1.
- * @param {string|null} player2Id - MongoDB ObjectId string for player 2, or null if no opponent.
- * @param {number} winner - Number indicating winner: 0 = draw, 1 = player1 wins, 2 = player2 wins.
- * @param {Array} finalBoard - Final board state array.
- *
- * @throws Will throw an error if required data is missing or save fails.
- */
-async function saveGameResult(fixtureId, player1TelegramId, player2TelegramId, winner, finalBoard) {
+async function saveGameResult(
+  fixtureId,
+  player1TelegramId,
+  player2TelegramId,
+  winner,
+  finalBoard
+) {
   try {
-    const fixture = await Fixture.findById(fixtureId).populate('tournament');
-    if (!fixture) throw new Error('Fixture not found');
+    const fixture = await Fixture.findById(fixtureId).populate("tournament");
+    if (!fixture) throw new Error("Fixture not found");
 
     const tournamentUniqueId = fixture.tournament?.uniqueId || null;
 
-    // Fetch players by telegram_id (assuming IDs passed are telegram IDs)
     const player1 = await User.findOne({ telegram_id: player1TelegramId }).lean();
-    if (!player1) throw new Error('Player 1 not found');
+    if (!player1) throw new Error("Player 1 not found");
 
     let player2 = null;
     if (player2TelegramId) {
       player2 = await User.findOne({ telegram_id: player2TelegramId }).lean();
-      if (!player2) throw new Error('Player 2 not found');
+      if (!player2) throw new Error("Player 2 not found");
     }
 
     const gameResult = new GameResult({
@@ -293,16 +245,13 @@ async function saveGameResult(fixtureId, player1TelegramId, player2TelegramId, w
     });
 
     await gameResult.save();
-    console.log('Game result saved with tournamentUniqueId:', tournamentUniqueId);
+    console.log("Game result saved with tournamentUniqueId:", tournamentUniqueId);
   } catch (err) {
-    console.error('Error saving game result:', err);
+    console.error("Error saving game result:", err);
     throw err;
   }
 }
 
-
-
-// Check if a given piece at position can capture again
 function hasFurtherCapture(board, pos, player) {
   const directions = [
     { dr: -1, dc: -1 },
@@ -314,12 +263,11 @@ function hasFurtherCapture(board, pos, player) {
   const piece = board[pos.row][pos.col];
   if (!piece || piece.player !== player) return false;
 
-  // Allow all directions for capturing, regardless of king status
   for (const { dr, dc } of directions) {
     const enemyRow = pos.row + dr;
     const enemyCol = pos.col + dc;
     const jumpRow = pos.row + 2 * dr;
-    const jumpCol = pos.col + 2 * dc;
+    const jumpCol = pos.row + 2 * dc;
 
     if (
       enemyRow < 0 ||
@@ -337,14 +285,13 @@ function hasFurtherCapture(board, pos, player) {
     const landingSquare = board[jumpRow][jumpCol];
 
     if (enemyPiece && enemyPiece.player !== player && !landingSquare) {
-      return true; // Can still capture
+      return true;
     }
   }
 
   return false;
 }
 
-//game over checker function
 function hasAnyValidMoves(board, player) {
   const directions = [
     { dr: -1, dc: -1 },
@@ -353,7 +300,6 @@ function hasAnyValidMoves(board, player) {
     { dr: 1, dc: 1 },
   ];
 
-  // Helper to get valid moves for a piece at (r,c)
   function getValidMovesForPiece(r, c) {
     const p = board[r][c];
     if (!p || p.player !== player) return [];
@@ -361,7 +307,6 @@ function hasAnyValidMoves(board, player) {
     let moves = [];
 
     if (p.king) {
-      // King moves any distance diagonally
       for (const { dr, dc } of directions) {
         let rr = r + dr;
         let cc = c + dc;
@@ -410,7 +355,6 @@ function hasAnyValidMoves(board, player) {
         }
       }
     } else {
-      // Normal piece moves
       const captureDirs = directions;
       for (const { dr, dc } of captureDirs) {
         const r1 = r + dr,
@@ -433,9 +377,8 @@ function hasAnyValidMoves(board, player) {
           });
         }
       }
-      if (moves.length > 0) return moves; // must capture if possible
+      if (moves.length > 0) return moves;
 
-      // No captures: forward moves only
       const fwdDirs =
         player === 1
           ? [
@@ -462,7 +405,6 @@ function hasAnyValidMoves(board, player) {
     return moves;
   }
 
-  // Check all pieces for player
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
       if (board[r][c] && board[r][c].player === player) {
@@ -473,104 +415,6 @@ function hasAnyValidMoves(board, player) {
 
   return false;
 }
-
-// Redis timer helpers
-async function getRoomTimer(fixtureId) {
-  try {
-    const val = await redisClient.get(`game:${fixtureId}:timer`);
-    return val !== null ? parseInt(val, 10) : null;
-  } catch (err) {
-    console.error("Redis getRoomTimer error:", err);
-    return null;
-  }
-}
-
-async function setRoomTimer(fixtureId, seconds) {
-  try {
-    await redisClient.set(
-      `game:${fixtureId}:timer`,
-      seconds,
-      "EX",
-      TIMER_DURATION
-    );
-  } catch (err) {
-    console.error("Redis setRoomTimer error:", err);
-  }
-}
-// --- PAIR WINNERS & CREATE MATCHES (with detailed logging) ---
-async function pairWinnersAndCreateMatches(tournamentUniqueId) {
-  if (!tournamentUniqueId) throw new Error('Invalid tournamentUniqueId format');
-
-  const tournament = await Tournament.findOne({ uniqueId: tournamentUniqueId });
-  if (!tournament) throw new Error('Tournament not found');
-
-  console.log(`\n=== Pair Winners & Create Matches for tournament ${tournamentUniqueId} ===`);
-
-  // Determine the last round with completed fixtures
-  const lastCompletedFixture = await Fixture.find({ tournament: tournament._id, status: 'completed' })
-    .sort({ round: -1 })
-    .limit(1)
-    .lean();
-
-  const lastCompletedRound = lastCompletedFixture.length > 0 ? lastCompletedFixture[0].round : 0;
-  const roundToPair = lastCompletedRound;
-
-  // Collect winners from that round
-  const completedFixtures = await Fixture.find({ tournament: tournament._id, round: roundToPair, status: 'completed' });
-  if (completedFixtures.length === 0) {
-    console.log(`[INFO] No completed fixtures found for round ${roundToPair}. Cannot pair winners.`);
-    return;
-  }
-
-  const winners = completedFixtures.map(f => (f.result === 1 ? f.player1.toString() : f.player2?.toString())).filter(Boolean);
-  const uniqueWinners = Array.from(new Set(winners));
-
-  console.log(`[INFO] Round ${roundToPair} winners:`, uniqueWinners);
-
-  if (uniqueWinners.length === 1) {
-    console.log(`[INFO] Tournament ${tournamentUniqueId} final winner: ${uniqueWinners[0]}`);
-    tournament.winner = uniqueWinners[0];
-    tournament.status = 'finished';
-    await tournament.save();
-
-    const winnerUser = await User.findById(uniqueWinners[0]);
-    if (winnerUser?.telegram_id) sendTelegramMessage(winnerUser.telegram_id, `🎉 Congratulations! You are the final winner!`);
-    return;
-  }
-
-  if (uniqueWinners.length < 2) {
-    console.log('[INFO] Not enough winners to create next round matches.');
-    return;
-  }
-
-  // Create next round fixtures
-  const nextRound = roundToPair + 1;
-  const newFixtures = [];
-
-  for (let i = 0; i < uniqueWinners.length; i += 2) {
-    const player1 = uniqueWinners[i];
-    const player2 = uniqueWinners[i + 1] || null;
-
-    const fixture = await Fixture.create({
-      tournament: tournament._id,
-      player1,
-      player2,
-      status: 'waiting',
-      round: nextRound,
-      board: [],
-    });
-
-    newFixtures.push(fixture._id);
-    console.log(`[INFO] Created Round ${nextRound} fixture ${fixture._id}: ${player1} vs ${player2 || 'BYE'}`);
-  }
-
-  tournament.fixtures.push(...newFixtures);
-  tournament.currentRound = nextRound;
-  await tournament.save();
-
-  console.log(`[INFO] Tournament ${tournamentUniqueId} updated with ${newFixtures.length} new fixtures for Round ${nextRound}`);
-}
-
 
 // --- HANDLE GAME OVER (with detailed logs and notifications) ---
 async function handleGameOver(fixtureId, winnerNumber, timeUp = false, finalBoard = []) {
@@ -1064,97 +908,6 @@ async function createChapaPayment(amount, user, phone) {
 
   return response.data.data.checkout_url; // Chapa checkout URL
 }
-app.post('/api/chapa-callback', async (req, res) => {
-  const { chatId, amount } = req.query;
-  const { status, tx_ref } = req.body; // depends on Chapa response
-
-  if (status === 'success') {
-    const user = await User.findOne({ telegram_id: chatId });
-    if (user) {
-      user.oneVsOne_balance = (user.oneVsOne_balance || 0) + Number(amount);
-      await user.save();
-      bot.sendMessage(chatId, `✅ Payment successful! Your new 1v1 balance is ${user.oneVsOne_balance} Birr`);
-    }
-  } else {
-    bot.sendMessage(chatId, `❌ Payment failed. Please try again.`);
-  }
-
-  res.sendStatus(200);
-});
-
-
-
-
-
-// --- /api/withdraw with webhook-based status ---
-app.post('/api/withdraw', express.json(), async (req, res) => {
-  console.log('--- [API] /api/withdraw request received ---');
-  console.log('[API] Request body:', req.body);
-
-  const { name, phone, amount, account_number, bank_code, tx_ref, chatId } = req.body;
-
-  // 1️⃣ Save withdrawal in DB (status: pending)
-  let withdrawal;
-  try {
-    withdrawal = await Withdraw.create({
-      userId: null, // optional if linked to DB user
-      name,
-      phone,
-      amount,
-      account_number,
-      bank_code,
-      tx_ref,
-      chatId,
-      status: 'pending', // Always start as pending
-    });
-    console.log(`[API] Withdrawal saved in DB: tx_ref=${tx_ref}`);
-  } catch (err) {
-    console.error('[API] Error saving withdrawal in DB:', err.message);
-    return res.status(500).json({ success: false, message: 'Error saving withdrawal.' });
-  }
-
-  // 2️⃣ Prepare Chapa payload
-  const payload = {
-    account_name: name,
-    account_number,
-    amount,
-    currency: 'ETB',
-    reference: tx_ref,
-    bank_code,
-  };
-  console.log('[API] Sending payload to Chapa:', payload);
-
-  // 3️⃣ Initiate Chapa transfer
-  try {
-    const chapaRes = await axios.post('https://api.chapa.co/v1/transfers', payload, {
-      headers: { Authorization: `Bearer ${CHAPA_SECRET_KEY}`, 'Content-Type': 'application/json' },
-    });
-    console.log('[API] Chapa transfer response:', chapaRes.data);
-
-    if (chapaRes.data.status === 'success') {
-      // ✅ Keep status as pending and wait for webhook
-      console.log(`[API] Withdrawal queued. Waiting for webhook notification: tx_ref=${tx_ref}`);
-      return res.json({
-        success: true,
-        message: `Withdrawal of ${amount} ETB queued. You will be notified once Chapa approves.`,
-        tx_ref,
-      });
-    } else {
-      withdrawal.status = 'failed';
-      await withdrawal.save();
-      console.log(`[API] Chapa transfer failed: tx_ref=${tx_ref}`);
-      return res.json({ success: false, message: 'Chapa transfer failed to queue.' });
-    }
-  } catch (err) {
-    withdrawal.status = 'failed';
-    await withdrawal.save();
-    console.error('[API] Error initiating Chapa transfer:', err.response?.data || err.message);
-    return res.json({ success: false, message: 'Server error during withdrawal.' });
-  }
-});
-
-
-
 
 
 
@@ -1545,6 +1298,127 @@ const BOARD_SIZE = 8;
 // ---------------------------
 // Socket Connections
 // ---------------------------
+// =====================
+// TURN TIMER (1v1 Dama)
+// =====================
+// =====================
+// TURN TIMER (1v1 Dama)
+// =====================
+const roomTimers = new Map();
+
+/**
+ * Start or continue the turn timer for a room.
+ * Automatically swaps turns when time runs out.
+ */
+async function startTurnTimer1V1(roomId, io) {
+  // Clear any existing timer for safety
+  if (roomTimers.has(roomId)) {
+    clearInterval(roomTimers.get(roomId));
+    roomTimers.delete(roomId);
+  }
+
+  let timeLeft = 30; // default turn time
+
+  const interval = setInterval(async () => {
+    try {
+      // Fetch latest room state
+      const room = await getRoomDama1V1(roomId);
+      if (!room || !room.gameState) {
+        console.log(`❌ Timer stopped: Room ${roomId} not active`);
+        clearInterval(interval);
+        roomTimers.delete(roomId);
+        return;
+      }
+
+      // Only run timer if game is started
+      if (room.gameState.status !== 'started') return;
+
+      // Decrease timer
+      timeLeft--;
+      room.gameState.turnTime = timeLeft;
+
+      // Save updated game state
+      await saveGameState(roomId, room.gameState);
+
+      // Notify clients of timer
+      io.to(roomId).emit('turnTimerUpdate', {
+        timeLeft,
+        currentTurn: room.gameState.currentTurn
+      });
+
+      // -----------------------------
+      // Handle timeout
+      // -----------------------------
+      if (timeLeft <= 0) {
+        const currentPlayer = room.gameState.currentTurn;
+        const opponent = Object.keys(room.gameState.colors).find(id => id !== currentPlayer);
+
+        console.log(`⏰ Player ${currentPlayer} ran out of time in room ${roomId}. Swapping turn to ${opponent}`);
+
+        // Swap turn to opponent
+        room.gameState.currentTurn = opponent;
+        room.gameState.turnTime = 30; // reset timer
+
+        // Save updated game state
+        await saveGameState(roomId, room.gameState);
+
+        // Emit timeout event
+        io.to(roomId).emit('turnTimeout', {
+          previousPlayer: currentPlayer,
+          nextPlayer: opponent,
+          message: `⏰ Player ${currentPlayer} ran out of time. Turn passed to ${opponent}`
+        });
+
+        // 🔹 Emit full game state so front-end re-renders board automatically
+        io.to(roomId).emit('gameState', room.gameState);
+
+        // Restart timer for next player
+        clearInterval(interval);
+        roomTimers.delete(roomId);
+        startTurnTimer1V1(roomId, io);
+      }
+    } catch (err) {
+      console.error(`❌ Error in turn timer for room ${roomId}:`, err);
+      clearInterval(interval);
+      roomTimers.delete(roomId);
+    }
+  }, 1000);
+
+  // Save interval reference
+  roomTimers.set(roomId, interval);
+}
+
+/**
+ * Reset turn timer manually (called after a valid player move)
+ */
+async function resetTurnTimer1V1(roomId, io) {
+  console.log(`🔄 Resetting turn timer for room ${roomId}`);
+
+  // Clear existing timer
+  if (roomTimers.has(roomId)) {
+    clearInterval(roomTimers.get(roomId));
+    roomTimers.delete(roomId);
+  }
+
+  const room = await getRoomDama1V1(roomId);
+  if (!room || !room.gameState || room.gameState.status !== 'started') return;
+
+  // Reset timer for current player
+  room.gameState.turnTime = 30;
+  await saveGameState(roomId, room.gameState);
+
+  // 🔹 NEW: Emit the updated game state so both players see changes immediately
+  io.to(roomId).emit('gameState', room.gameState);
+
+  // Start a new timer
+  startTurnTimer1V1(roomId, io);
+}
+
+
+
+// =====================
+// SOCKET CONNECTION
+// =====================
 dama.on('connection', (socket) => {
   console.log(`✅ Player connected: ${socket.id}`);
 
@@ -1552,37 +1426,39 @@ dama.on('connection', (socket) => {
   // Join Game Room
   // -----------------------
   socket.on('joinGameRoom', async ({ roomId, playerId, userName }) => {
-    console.log(`🔹 Player ${playerId} attempting to join room ${roomId}`);
     try {
       socket.join(roomId);
 
       const { room, created, error } = await createOrJoinRoomDama1V1(roomId, playerId, 0, userName);
       if (error) return socket.emit('errorMessage', error);
 
-      // Initialize game state only if room is newly created
       if (created) {
         room.gameState = {
           board: initializeBoard(),
           colors: { [playerId]: 'red' },
-          currentTurn: playerId, // first player starts
+          currentTurn: playerId,
           status: 'waiting',
-          winner: null
+          winner: null,
+          turnTime: 30
         };
       } else {
-        // Existing room, ensure player color is assigned
         room.gameState.colors = room.gameState.colors || {};
         if (!room.gameState.colors[playerId]) {
           room.gameState.colors[playerId] = Object.values(room.gameState.colors).includes('red') ? 'green' : 'red';
         }
-        // ✅ Do NOT overwrite currentTurn
       }
 
       // Start game if 2 players
       if (room.players.length === 2 && room.gameState.status !== 'started') {
         room.gameState.status = 'started';
+        await saveGameState(roomId, room.gameState);
+
+        // Start first turn timer
+        await startTurnTimer1V1(roomId, dama);
+      } else {
+        await saveGameState(roomId, room.gameState);
       }
 
-      await saveGameState(roomId, room.gameState);
       dama.to(roomId).emit('gameState', room.gameState);
 
     } catch (err) {
@@ -1592,178 +1468,176 @@ dama.on('connection', (socket) => {
   });
 
   // -----------------------
-  // Player leaves / disconnect
-  // -----------------------
-  const handlePlayerLeave = async (roomId, playerId) => {
-    try {
-      const room = await getRoomDama1V1(roomId);
-      if (!room) return;
-
-      console.log(`🛑 Player ${playerId} leaving room ${roomId}`);
-      room.players = room.players.filter(p => p !== playerId);
-      delete room.gameState.colors[playerId];
-
-      if (room.players.length === 0) {
-        await deleteRoomDama1V1(roomId);
-        console.log(`⚠️ Room ${roomId} deleted (empty)`);
-      } else {
-        if (room.gameState.currentTurn === playerId) room.gameState.currentTurn = room.players[0];
-        await saveGameState(roomId, room.gameState);
-        dama.to(roomId).emit('gameState', room.gameState);
-      }
-
-      socket.to(roomId).emit('playerLeft', { playerId });
-    } catch (err) {
-      console.error(`❌ handlePlayerLeave error for player ${playerId} in room ${roomId}:`, err);
-    }
-  };
-
-  // -----------------------
-  // Player Move Handler
+  // Player Move
   // -----------------------
   const OneVOneResult = require('./models/1V1result');
   const User = require('./models/user');
   const stakePercentage = 0.9; // 10% fee applied
 
-  socket.on('playerMove', async ({ roomId, playerId, fromRow, fromCol, toRow, toCol, captured }) => {
-    console.log(`🎲 PlayerMove received from ${playerId} in room ${roomId}`, { fromRow, fromCol, toRow, toCol, captured });
+socket.on('playerMove', async ({ roomId, playerId, fromRow, fromCol, toRow, toCol, captured }) => {
+  try {
+    console.log(`🎯 Player ${playerId} made a move in room ${roomId}`);
 
-    try {
-      const move = {
-        from: { row: fromRow, col: fromCol },
-        to: { row: toRow, col: toCol },
-        capture: captured ? { row: captured[0], col: captured[1] } : null
-      };
+    const move = {
+      from: { row: fromRow, col: fromCol },
+      to: { row: toRow, col: toCol },
+      capture: captured ? { row: captured[0], col: captured[1] } : null
+    };
 
-      // Apply move using centralized function
-      const { success, gameState, error } = await applyMove(roomId, move, playerId, dama);
-      if (!success) {
-        console.log(`❌ applyMove failed: ${error}`);
-        return socket.emit('errorMessage', error);
+    // Apply the move logic
+    const { success, gameState, multiCapture, error } = await applyMove(roomId, move, playerId, dama);
+    if (!success) {
+      console.warn(`⚠️ Invalid move by ${playerId}: ${error}`);
+      return socket.emit('errorMessage', error);
+    }
+
+    // Fetch latest room
+    const room = await getRoomDama1V1(roomId);
+    if (!room) return console.warn(`⚠️ Room ${roomId} not found after move`);
+
+    // Update room gameState
+    room.gameState = gameState;
+
+    // -----------------------------
+    // Swap turn & reset timer
+    // -----------------------------
+    if (gameState.status === 'started' && !multiCapture) {
+      const nextPlayer = Object.keys(room.gameState.colors).find(id => id !== playerId);
+      room.gameState.currentTurn = nextPlayer;
+      console.log(`🔄 Turn swapped: ${playerId} ➜ ${nextPlayer}`);
+
+      await saveGameState(roomId, room.gameState);
+
+      // Reset turn timer — client will refresh page on reset
+      await resetTurnTimer1V1(roomId, dama);
+    } else if (multiCapture) {
+      console.log(`🔁 Multi-capture — ${playerId} keeps the turn`);
+      await saveGameState(roomId, room.gameState);
+    }
+
+    // -----------------------------
+    // Broadcast updated game state
+    // -----------------------------
+    dama.to(roomId).emit('gameState', room.gameState);
+    console.log('📡 Updated gameState broadcasted successfully');
+
+    // -----------------------------
+    // Handle game finish
+    // -----------------------------
+    if (gameState.status === 'finished' && gameState.winner) {
+      const stake = room?.betAmount || 0;
+      const winningAmount = stake * 2 * 0.9; // 10% fee
+      const winnerId = gameState.winner;
+
+      console.log(`🏁 Game finished! Winner: ${winnerId}`);
+
+      // Update winner balance
+      const winnerUser = await User.findOne({ telegramId: winnerId });
+      let newBalance = null;
+      if (winnerUser) {
+        winnerUser.oneVsOne_balance = (winnerUser.oneVsOne_balance || 0) + winningAmount;
+        await winnerUser.save();
+        newBalance = winnerUser.oneVsOne_balance;
+        console.log(`💰 Updated winner balance: ${newBalance}`);
       }
 
-      // Broadcast updated game state
-      dama.to(roomId).emit('gameState', gameState);
-      console.log(`✅ Move applied for player ${playerId}: (${fromRow},${fromCol}) -> (${toRow},${toCol})`);
-
-      // ------------------------
-      // Handle Game Finished
-      // ------------------------
-      if (gameState.status === 'finished' && gameState.winner) {
-        console.log(`🏆 Game finished in room ${roomId}. Winner: ${gameState.winner}`);
-
-        // Safely fetch the room
-        const room = await getRoomDama1V1(roomId);
-        if (!room) {
-          console.warn(`⚠️ Room ${roomId} not found (possibly already deleted)`);
-          return;
-        }
-
-        const stake = room?.betAmount || 0;
-        const winningAmount = stake * 2 * stakePercentage; // 10% fee applied via stakePercentage
-
-        // ✅ Update winner's balance in DB
-        const winnerUser = await User.findOne({ telegramId: gameState.winner });
-        let newBalance = null;
-        if (winnerUser) {
-          winnerUser.oneVsOne_balance = (winnerUser.oneVsOne_balance || 0) + winningAmount;
-          await winnerUser.save();
-          newBalance = winnerUser.oneVsOne_balance;
-          console.log(`💰 Updated winner balance: ${newBalance}`);
-        }
-
-        // ✅ Save game result only if room has players
-        if (room.players && room.players.length === 2) {
-          await OneVOneResult.create({
-            roomId,
-            player1: { id: room.players[0], name: room.players[0] },
-            player2: { id: room.players[1], name: room.players[1] },
-            winner: gameState.winner,
-            totalStake: stake * 2,
-          });
-        }
-
-        // ✅ Emit gameOver event
-        dama.to(roomId).emit('gameOver', {
-          winnerId: gameState.winner,
-          message: `🏆 Player ${gameState.winner} wins!`,
-          winningAmount,
-          newBalance
+      // Record match result
+      if (room.players.length === 2) {
+        await OneVOneResult.create({
+          roomId,
+          player1: { id: room.players[0], name: room.players[0] },
+          player2: { id: room.players[1], name: room.players[1] },
+          winner: winnerId,
+          totalStake: stake * 2
         });
-        console.log(`📣 gameOver event emitted to room ${roomId} with newBalance: ${newBalance}`);
-
-        // ✅ Delete room from Redis after game finished
-        await deleteRoomDama1V1(roomId);
-        console.log(`🗑️ Room ${roomId} deleted from Redis after game finished`);
       }
 
-    } catch (err) {
-      console.error(`❌ playerMove error for ${playerId} in room ${roomId}:`, err);
-      socket.emit('errorMessage', 'Internal server error');
+      // Notify clients
+      dama.to(roomId).emit('gameOver', {
+        winnerId,
+        message: `🏆 Player ${winnerId} wins!`,
+        winningAmount,
+        newBalance
+      });
+
+      // Cleanup
+      if (roomTimers.has(roomId)) {
+        clearInterval(roomTimers.get(roomId));
+        roomTimers.delete(roomId);
+      }
+      await deleteRoomDama1V1(roomId);
+      console.log(`🧹 Room ${roomId} cleaned up after game end`);
     }
-  });
+
+  } catch (err) {
+    console.error(`❌ playerMove error in room ${roomId}:`, err);
+    socket.emit('errorMessage', 'Internal server error');
+  }
+});
+
+
 
   // -----------------------
-  // Graceful Disconnect
+  // Player Disconnect / Leave
   // -----------------------
-  const disconnectedPlayers = {}; // { playerId: timeoutId }
-
   socket.on('dislink', async ({ roomId, playerId }) => {
-    try {
-      const leavingPlayerId = playerId || socket.id;
+    const leavingPlayerId = playerId || socket.id;
 
-      // If roomId not provided, find all rooms containing this player
-      const targetRooms = roomId
-        ? [{ roomId }]
-        : (await getAllRoomsDama1V1())
-            .filter(r => r.players.includes(leavingPlayerId))
-            .map(r => ({ roomId: r.roomId }));
+    const targetRooms = roomId
+      ? [{ roomId }]
+      : (await getAllRoomsDama1V1())
+          .filter(r => r.players.includes(leavingPlayerId))
+          .map(r => ({ roomId: r.roomId }));
 
-      for (const r of targetRooms) {
-        const room = await getRoomDama1V1(r.roomId);
-        if (!room) continue;
+    for (const r of targetRooms) {
+      const room = await getRoomDama1V1(r.roomId);
+      if (!room) continue;
 
-        if (room.gameState.status === 'finished' || room.gameState.winner) {
-          console.log(`🛑 Player ${leavingPlayerId} leaving room ${r.roomId} (game finished)`);
-          room.players = room.players.filter(p => p !== leavingPlayerId);
-          delete room.gameState.colors[leavingPlayerId];
+      if (room.gameState.status === 'finished' || room.gameState.winner) {
+        room.players = room.players.filter(p => p !== leavingPlayerId);
+        delete room.gameState.colors[leavingPlayerId];
 
-          if (room.players.length === 0) {
-            await deleteRoomDama1V1(r.roomId);
-            console.log(`⚠️ Room ${r.roomId} deleted (empty)`);
-          } else {
-            await saveGameState(r.roomId, room.gameState);
-            dama.to(r.roomId).emit('gameState', room.gameState);
+        if (room.players.length === 0) {
+          if (roomTimers.has(r.roomId)) {
+            clearInterval(roomTimers.get(r.roomId));
+            roomTimers.delete(r.roomId);
           }
-
-          socket.to(r.roomId).emit('playerLeft', { playerId: leavingPlayerId });
+          await deleteRoomDama1V1(r.roomId);
         } else {
-          console.log(`⚠️ Player ${leavingPlayerId} disconnected but remains in room ${r.roomId} (game ongoing)`);
-          dama.to(r.roomId).emit('playerDisconnected', { playerId: leavingPlayerId });
+          await saveGameState(r.roomId, room.gameState);
+          dama.to(r.roomId).emit('gameState', room.gameState);
         }
+
+        socket.to(r.roomId).emit('playerLeft', { playerId: leavingPlayerId });
+      } else {
+        dama.to(r.roomId).emit('playerDisconnected', { playerId: leavingPlayerId });
       }
-    } catch (err) {
-      console.error(`❌ dislink error for player ${playerId || socket.id}:`, err);
     }
   });
 
   // -----------------------
-  // Reconnect handler
+  // Reconnect Player
   // -----------------------
+  const disconnectedPlayers = {};
   socket.on('reconnectPlayer', ({ roomId, playerId }) => {
     if (disconnectedPlayers[playerId]) {
       clearTimeout(disconnectedPlayers[playerId]);
       delete disconnectedPlayers[playerId];
-      console.log(`🔹 Player ${playerId} reconnected, canceling scheduled leave`);
+      console.log(`🔹 Player ${playerId} reconnected`);
     }
   });
-
 });
 
 
 
 
-// Start server
+// Note: Legacy webhook handlers removed. Use routes in ./routes/payments.js under /api.
+
+// ✅ View withdrawals
+app.get('/withdrawals', (req, res) => res.json(withdrawals));
+
+// Start server (use same HTTP server as socket.io)
 server.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  try { startReconcileScheduler(); } catch {}
 });

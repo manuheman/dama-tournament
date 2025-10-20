@@ -1,9 +1,9 @@
-// Seed a demo tournament, users, and fixtures
-import dotenv from "dotenv";
-import mongoose from "mongoose";
-import User from "../models/user.js";
-import Tournament from "../models/tournament.js";
-import Fixture from "../models/fixture.js";
+// Seed a demo tournament, users, and fixtures (aligned with CommonJS models)
+const dotenv = require("dotenv");
+const mongoose = require("mongoose");
+const Fixture = require("./models/fixture");
+const Tournament = require("./models/tournament");
+const User = require("./models/user");
 
 dotenv.config();
 
@@ -15,14 +15,27 @@ async function run() {
   console.log("✅ Connected to MongoDB");
 
   try {
-    // Clean previous demo
-    await Promise.all([
-      User.deleteMany({
-        telegram_id: { $in: ["demo_p1", "demo_p2", "demo_p3", "demo_p4"] },
-      }),
-      Tournament.deleteMany({ uniqueId: "GAME-DEMO" }),
-      Fixture.deleteMany({}),
-    ]);
+    // Clean previous demo (scoped to demo data only)
+    const demoIds = ["demo_p1", "demo_p2", "demo_p3", "demo_p4"];
+
+    // Delete demo users
+    const userDel = User.deleteMany({ telegram_id: { $in: demoIds } });
+
+    // Find existing demo tournaments and delete their fixtures, then the tournaments
+    const oldTournaments = await Tournament.find(
+      { uniqueId: "GAME-DEMO" },
+      { _id: 1 }
+    );
+    const oldTIds = oldTournaments.map((t) => t._id);
+
+    const fixtureDel = oldTIds.length
+      ? Fixture.deleteMany({ tournament: { $in: oldTIds } })
+      : Promise.resolve();
+    const tourDel = oldTIds.length
+      ? Tournament.deleteMany({ _id: { $in: oldTIds } })
+      : Promise.resolve();
+
+    await Promise.all([userDel, fixtureDel, tourDel]);
 
     const [p1, p2, p3, p4] = await User.insertMany([
       {
@@ -53,7 +66,8 @@ async function run() {
     console.log("👥 Users:", p1.name, p2.name, p3.name, p4.name);
 
     const tournament = await Tournament.create({
-      type: "Daily",
+      // Tournament.type must be one of ['Silver', 'Gold', 'Platinum'] per schema
+      type: "Silver",
       balance: 50,
       players: [p1._id, p2._id, p3._id, p4._id],
       maxPlayers: 4,
@@ -67,7 +81,8 @@ async function run() {
         player1: p1._id,
         player2: p2._id,
         status: "scheduled",
-        result: "pending",
+        // Fixture.result is a Number enum: 0=pending, 1=player1, 2=player2, 3=draw
+        result: 0,
         matchTime: new Date(Date.now() + 10 * 60 * 1000),
       },
       {
@@ -75,7 +90,7 @@ async function run() {
         player1: p3._id,
         player2: p4._id,
         status: "scheduled",
-        result: "pending",
+        result: 0,
         matchTime: new Date(Date.now() + 20 * 60 * 1000),
       },
     ]);

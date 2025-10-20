@@ -45,6 +45,14 @@ const postRegistrationMenu = [
     { text: '🤝 1v1 Game', callback_data: 'post_1v1' }
   ],
   [
+    { text: '💳 Deposit', callback_data: '1v1_deposit' },
+    { text: '🏦 Withdraw', callback_data: '1v1_withdraw' }
+  ],
+  [
+    { text: '💰 Balance', callback_data: '1v1_balance' },
+    { text: '📜 Transaction', callback_data: '1v1_transaction' }
+  ],
+  [
     { text: 'ℹ️ My Info', callback_data: 'my_info' },
     { text: '📞 Contact Us', callback_data: 'contact_us' }
   ],
@@ -55,23 +63,35 @@ const postRegistrationMenu = [
 
 
 
+
 const withdrawalMethodButtons = [
   [{ text: 'Telebirr', callback_data: 'withdraw_telebirr' }],
   [{ text: 'CBE Birr', callback_data: 'withdraw_cbe' }],
   [{ text: 'M-Pesa', callback_data: 'withdraw_mpesa' }],
-  [{ text: '⬅️ Back', callback_data: 'post_1v1' }]
+  [{ text: '⬅️ Back', callback_data: 'back_to_post' }]
 ];
 
 
 
 // ----- User cache -----
-const userCache = new Map(); // chatId => user
+// Removed caching to ensure live user data (no stale info)
 async function getCachedUser(chatId, telegramId) {
-  if (userCache.has(chatId)) return userCache.get(chatId);
-  const user = await User.findOne({ telegram_id: telegramId });
-  if (user) userCache.set(chatId, user);
-  return user;
+  try {
+    // Always fetch the latest user info from MongoDB
+    const user = await User.findOne({ telegram_id: telegramId });
+
+    if (!user) {
+      console.warn(`User not found for Telegram ID: ${telegramId}`);
+      return null;
+    }
+
+    return user;
+  } catch (err) {
+    console.error('Error fetching user:', err);
+    return null;
+  }
 }
+
 
 // ----- Menus -----
 const mainMenuButtons = (chatId) => [
@@ -216,6 +236,36 @@ async function initiateChapaWithdrawal(withdrawal, userName) {
     console.error('[Chapa Withdrawal] Error:', err.response?.data || err.message);
     return { success: false, message: `❌ Error initiating withdrawal.` };
   }
+}
+
+function normalizePhone(phone) {
+  if (!phone) return null;
+
+  // Remove spaces, dashes, plus signs
+  let cleaned = phone.replace(/[\s-+]/g, '');
+
+  // If it starts with '0', convert to +251
+  if (cleaned.startsWith('0')) {
+    return '+251' + cleaned.substring(1);
+  }
+
+  // If it already starts with '251', add plus
+  if (cleaned.startsWith('251')) {
+    return '+251' + cleaned.substring(3);
+  }
+
+  // If it already starts with +251 (after cleanup)
+  if (cleaned.startsWith('251')) {
+    return '+251' + cleaned.substring(3);
+  }
+
+  // If it already has +251
+  if (phone.startsWith('+251')) {
+    return phone;
+  }
+
+  // Default: just return with +251
+  return '+251' + cleaned;
 }
 
 
@@ -413,13 +463,13 @@ bot.on('message', async (msg) => {
 
       console.log(`[Chapa Deposit] Sending deposit request to server API for chatId: ${chatId}, amount: ${amount}, phone: ${phone}`);
 
-      const response = await axios.post(`${process.env.NGROK_URL}/api/deposit`, { chatId, amount, phone });
-      console.log('[Chapa Deposit] Server response:', response.data);
+  const response = await axios.post(`${process.env.NGROK_URL}/api/deposit/init`, { chatId, amount, phone });
+  console.log('[Chapa Deposit] Server response:', response.data);
 
       return bot.sendMessage(chatId, `💳 Complete your payment via Chapa by clicking below:`, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: `Pay ${amount} Birr via Chapa`, url: response.data.checkoutUrl }],
+            [{ text: `Pay ${amount} Birr via Chapa`, url: response.data.checkout_url }],
             [{ text: '⬅️ Back', callback_data: 'post_1v1' }]
           ]
         }
@@ -455,36 +505,52 @@ if (waitingForWithdrawAmount.has(chatId)) {
 //telebirr number asking step
 // ----- Telebirr Number Step -----
 
-// ----- Telebirr Number Step -----
+// ----- Withdrawal Phone Steps (by wallet) -----
 if (waitingForWithdrawPhone.has(chatId)) {
   const state = waitingForWithdrawPhone.get(chatId);
 
-  if (state.step === 'waitingForTelebirrNumber') {
-    let phone = msg.text.trim();
-    if (!/^\d{10}$/.test(phone)) {
-      return bot.sendMessage(chatId, '❌ Invalid Telebirr number. Please enter a 10-digit number.');
+  const processWithdrawal = async ({ walletLabel, walletCode }) => {
+    let raw = (msg.text || '').trim();
+    let phone;
+    try {
+      phone = normalizePhone(raw);
+    } catch {
+      return bot.sendMessage(chatId, `❌ Invalid ${walletLabel} number. Please send a valid phone (e.g., 09xxxxxxxx, 07xxxxxxxx, 2519xxxxxxxx, or +2519xxxxxxxx).`);
     }
 
     const user = await getCachedUser(chatId, telegramId);
     if (!user) return bot.sendMessage(chatId, '❌ User not found.');
 
-    const withdrawal = await Withdraw.create({
-      userId: user._id,
-      amount: state.amount,
-      phone,
-      tx_ref: `withdraw-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      status: 'pending'
-    });
-
-    user.oneVsOne_balance -= state.amount;
-    await user.save();
-
     waitingForWithdrawPhone.delete(chatId);
+    bot.sendMessage(chatId, `⏳ Initiating your withdrawal of ${state.amount} ETB via ${walletLabel}...`);
 
-    bot.sendMessage(chatId, `⏳ Initiating your withdrawal of ${state.amount} ETB via Telebirr...`);
+    try {
+      const resp = await axios.post(`${process.env.NGROK_URL}/api/withdraw`, {
+        chatId,
+        amount: state.amount,
+        phone,
+        wallet: walletCode,          // TELEBIRR | CBE_BIRR | MPESA
+        channel: 'MOBILE_MONEY'
+      });
+      const status = resp.data?.status || 'pending';
+      if (status === 'success') {
+        return bot.sendMessage(chatId, `✅ Withdrawal of ${state.amount} ETB via ${walletLabel} successful.`);
+      }
+      return bot.sendMessage(chatId, `⏳ Withdrawal via ${walletLabel} queued. Status: ${status}. We'll notify you when it's complete.`);
+    } catch (e) {
+      console.error('[Withdraw] API error:', e.response?.data || e.message);
+      return bot.sendMessage(chatId, `❌ ${walletLabel} withdrawal failed to start. Please try again later.`);
+    }
+  };
 
-    const result = await initiateChapaWithdrawal(withdrawal, user.name);
-    bot.sendMessage(chatId, result.message);
+  if (state.step === 'waitingForTelebirrNumber') {
+    return processWithdrawal({ walletLabel: 'Telebirr', walletCode: 'TELEBIRR' });
+  }
+  if (state.step === 'waitingForCbeNumber') {
+    return processWithdrawal({ walletLabel: 'CBE Birr', walletCode: 'CBE_BIRR' });
+  }
+  if (state.step === 'waitingForMpesaNumber') {
+    return processWithdrawal({ walletLabel: 'M-Pesa', walletCode: 'MPESA' });
   }
 }
 
@@ -564,16 +630,18 @@ bot.on('callback_query', async (callbackQuery) => {
 
   // ----- Helper buttons -----
   const oneVsOneMenu = [
+      [{
+        text: '🎮 Play',
+        web_app: { url: `${NGROK_URL}/dashboard.html?userId=${chatId}` }
+      }],
     [
-      { text: '🎮 Play', callback_data: '1v1_play' },
+      
       { text: '💰 Balance', callback_data: '1v1_balance' }
     ],
+  
+    
     [
-      { text: '💳 Deposit', callback_data: '1v1_deposit' },
-      { text: '🏦 Withdraw', callback_data: '1v1_withdraw' }
-    ],
-    [
-      { text: '📜 Transaction', callback_data: '1v1_transaction' },
+    
       { text: '⬅️ Back', callback_data: 'back_to_post' }
     ]
   ];
@@ -581,7 +649,7 @@ bot.on('callback_query', async (callbackQuery) => {
   const chapaOrArifButtons = [
     [{ text: '💳 Chapa Pay', callback_data: 'deposit_chapa' }],
     [{ text: '💳 ArifPay', callback_data: 'deposit_arifpay' }],
-    [{ text: '⬅️ Back', callback_data: 'post_1v1' }]
+    [{ text: '⬅️ Back', callback_data: 'back_to_post' }]
   ];
 
   try {
@@ -644,7 +712,7 @@ bot.on('callback_query', async (callbackQuery) => {
       case data === '1v1_balance':
         if (!user) return requireRegistration('post_1v1');
         await removePreviousButtons();
-        return editMessage(chatId, messageId, `💰 Your 1v1 Balance: ${user.oneVsOne_balance || 0} Birr`, [[{ text: '⬅️ Back', callback_data: 'post_1v1' }]]);
+        return editMessage(chatId, messageId, `💰 Your 1v1 Balance: ${user.oneVsOne_balance || 0} Birr`, [[{ text: '⬅️ Back', callback_data: 'back_to_post' }]]);
 
 
 
@@ -672,6 +740,32 @@ bot.on('callback_query', async (callbackQuery) => {
   waitingForWithdrawPhone.set(chatId, state);
 
   return bot.sendMessage(chatId, '📱 Please enter your Telebirr number for withdrawal:');
+
+  case data === 'withdraw_cbe':
+    if (!user) return requireRegistration('post_1v1');
+    await removePreviousButtons();
+
+    const cbeState = waitingForWithdrawPhone.get(chatId);
+    if (!cbeState || !cbeState.amount) return bot.sendMessage(chatId, '❌ Please enter withdrawal amount first.');
+
+    cbeState.method = 'cbe_birr';
+    cbeState.step = 'waitingForCbeNumber';
+    waitingForWithdrawPhone.set(chatId, cbeState);
+
+    return bot.sendMessage(chatId, '🏦 Please enter your CBE Birr phone number for withdrawal:');
+
+  case data === 'withdraw_mpesa':
+    if (!user) return requireRegistration('post_1v1');
+    await removePreviousButtons();
+
+    const mpesaState = waitingForWithdrawPhone.get(chatId);
+    if (!mpesaState || !mpesaState.amount) return bot.sendMessage(chatId, '❌ Please enter withdrawal amount first.');
+
+    mpesaState.method = 'mpesa';
+    mpesaState.step = 'waitingForMpesaNumber';
+    waitingForWithdrawPhone.set(chatId, mpesaState);
+
+    return bot.sendMessage(chatId, '📲 Please enter your M‑Pesa phone number for withdrawal:');
 
 
 

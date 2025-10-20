@@ -1,7 +1,7 @@
 const BOARD_SIZE = 8;
 const boardElement = document.getElementById("board");
 const turnIndicator = document.getElementById("turn-indicator");
-const restartBtn = document.getElementById("restartBtn");
+
 
 let board = [];
 let selectedPiece = null;
@@ -217,8 +217,11 @@ function handleClick(row, col) {
     // -----------------
     selectedPiece = null;
     validMoves = [];
-    currentTurn = null;
     clearHighlights();
+
+    // **Do NOT set currentTurn locally**
+    // Just let server emit new gameState for turn swap
+    boardEnabled = false; // temporarily disable until server confirms
     updateTurnIndicator();
   }
 }
@@ -616,24 +619,87 @@ function getOpponentId() {
 }
 
 
-function renderBoard() {
-  boardElement.innerHTML = '';
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const cell = board[r][c];
-      const cellElement = document.createElement('div');
-      cellElement.classList.add('cell');
-      if ((r + c) % 2 === 0) cellElement.classList.add('light');
-      else cellElement.classList.add('dark');
 
-      if (cell?.element) cellElement.appendChild(cell.element);
-      cellElement.dataset.row = r;
-      cellElement.dataset.col = c;
+function updateGameState(game) {
+  myColor = game.colors[myPlayerId] || null;
+  currentTurn = game.currentTurn;
+  boardEnabled = game.status === 'started' && currentTurn === myPlayerId;
 
-      boardElement.appendChild(cellElement);
+  if (game.status === 'finished' && game.winner) {
+    showWinnerOverlay(game.winner);
+    boardEnabled = false;
+    turnIndicator.textContent =
+      game.winner === myPlayerId ? "🏆 You Won!" : "💀 You Lost!";
+    boardElement.innerHTML = '';
+    return;
+  }
+
+  renderBoard(game.board); // always render latest board
+  updateTurnIndicator();
+}
+
+
+function renderBoard(serverBoard = null) {
+  // If serverBoard is provided, sync local board
+  if (serverBoard) {
+    board = Array.from({ length: BOARD_SIZE }, (_, r) =>
+      Array.from({ length: BOARD_SIZE }, (_, c) => {
+        const data = serverBoard[r][c];
+        if (!data) return null;
+        const piece = createPiece(data.color, data.player, data.king || false);
+        if (piece.king) {
+          piece.element.textContent = '👑';
+          piece.element.style.border = '2px solid gold';
+        }
+        return piece;
+      })
+    );
+  }
+
+  // Ensure boardElement has exactly BOARD_SIZE² children
+  if (boardElement.children.length !== BOARD_SIZE * BOARD_SIZE) {
+    boardElement.innerHTML = '';
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        const square = document.createElement('div');
+        square.classList.add('square', (r + c) % 2 === 0 ? 'light' : 'dark');
+        square.dataset.row = r;
+        square.dataset.col = c;
+        square.addEventListener('click', () => handleClick(r, c));
+        boardElement.appendChild(square);
+      }
     }
   }
+
+  // Update each square with the current piece
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      const square = boardElement.children[r * BOARD_SIZE + c];
+      const cell = board[r][c];
+
+      // Clear previous piece but keep the square
+      square.innerHTML = '';
+
+      if (cell?.element) {
+        square.appendChild(cell.element);
+
+        // Rotate piece if board is flipped
+        cell.element.style.transform =
+          myColor === 'green' ? 'rotate(180deg)' : 'rotate(0deg)';
+      }
+
+      // Remove highlight classes to prevent duplicates
+      square.classList.remove('highlight', 'capture-highlight', 'selected', 'selectable');
+    }
+  }
+
+  // Highlight selectable pieces and moves if board is enabled
+  if (boardEnabled) {
+    highlightSelectablePieces();
+    if (selectedPiece) highlightValidMoves();
+  }
 }
+
 
 
 
@@ -645,14 +711,6 @@ function getSquare(row, col) {
   return boardElement.children[row * BOARD_SIZE + col];
 }
 
-// -----------------
-// Restart
-// -----------------
-restartBtn.addEventListener('click', () => {
-  if (!boardEnabled) return;
-  initBoard();
-  updateTurnIndicator();
-});
 
 
 
@@ -664,95 +722,77 @@ socket.emit('joinGameRoom', { roomId, playerId: myPlayerId });
 // -----------------
 // Listen for game state updates
 // -----------------
+// ----------------------------
+// Listen for game state updates
+// ----------------------------
 socket.on('gameState', (game) => {
-  console.log('📡 Received gameState from server:', game);
+  console.log('📡 [Listener] Received gameState from server:', game);
+
+  if (!game) {
+    console.warn('⚠️ Received empty game state!');
+    return;
+  }
 
   // ----------------------------
-  // Set player's color from server
+  // Update player color and board flip
   // ----------------------------
   myColor = game.colors[myPlayerId] || null;
-
-  // ----------------------------
-  // Flip board for Player 2 (green)
-  // ----------------------------
   if (myColor === 'green') {
     boardElement.classList.add('board-flipped');
   } else {
     boardElement.classList.remove('board-flipped');
   }
+  console.log(`🎨 Player color set to ${myColor}`);
 
   // ----------------------------
-  // Always use server's currentTurn
+  // Update current turn & board enabled
   // ----------------------------
   currentTurn = game.currentTurn;
-
-  // Enable board only if it's player's turn and game has started
   boardEnabled = game.status === 'started' && currentTurn === myPlayerId;
+  console.log(`🔄 Current turn: ${currentTurn}, boardEnabled: ${boardEnabled}`);
 
   // ----------------------------
-  // Check winner before rendering board
+  // Handle finished game
   // ----------------------------
   if (game.status === 'finished' && game.winner) {
-    console.log(`🏆 Winner detected in gameState: ${game.winner}`);
+    console.log(`🏆 Winner detected: ${game.winner}`);
     showWinnerOverlay(game.winner);
-    boardEnabled = false; // disable moves
-    return; // stop rendering board; balance comes via 'gameOver'
+    boardEnabled = false;
+    turnIndicator.textContent =
+      game.winner === myPlayerId ? "🏆 You Won!" : "💀 You Lost!";
+    boardElement.innerHTML = ''; // optional: clear board
+    return;
   }
 
   // ----------------------------
-  // Clear old board
+  // Waiting for opponent
   // ----------------------------
-  boardElement.innerHTML = '';
-
-  // Show waiting message if game not started
   if (game.status === 'waiting') {
     console.log('⏳ Waiting for opponent...');
     boardEnabled = false;
+    boardElement.innerHTML = '';
     boardElement.appendChild(waitingMessage);
     turnIndicator.textContent = 'Waiting for opponent...';
     return;
   }
 
   // ----------------------------
-  // Render the board
+  // Render board
   // ----------------------------
-  board = Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(null));
-
-  for (let row = 0; row < BOARD_SIZE; row++) {
-    for (let col = 0; col < BOARD_SIZE; col++) {
-      const squareData = game.board[row][col];
-      const square = document.createElement('div');
-      square.classList.add('square', (row + col) % 2 === 0 ? 'light' : 'dark');
-      square.dataset.row = row;
-      square.dataset.col = col;
-
-      if (squareData) {
-        const piece = createPiece(squareData.color, squareData.player);
-        piece.king = squareData.king || false;
-        if (piece.king) piece.element.style.border = '2px solid gold';
-        piece.element.style.transform = myColor === 'green' ? 'rotate(180deg)' : 'rotate(0deg)';
-
-        square.appendChild(piece.element);
-        board[row][col] = piece;
-      }
-
-      square.addEventListener('click', () => handleClick(row, col));
-      boardElement.appendChild(square);
-    }
-  }
+  console.log('🖼️ Rendering board...');
+  renderBoard(game.board);
 
   // ----------------------------
-  // Highlight & UI updates
+  // Clear old highlights
   // ----------------------------
   clearHighlights();
-  updateTurnIndicator();
 
   // ----------------------------
-  // Enforce mandatory captures
+  // Highlight selectable pieces
   // ----------------------------
-  let mandatoryCaptures = [];
   if (boardEnabled) {
-    mandatoryCaptures = getMandatoryCaptures(myPlayerId);
+    console.log('✨ Highlighting selectable pieces...');
+    const mandatoryCaptures = getMandatoryCaptures(myPlayerId);
 
     for (let r = 0; r < BOARD_SIZE; r++) {
       for (let c = 0; c < BOARD_SIZE; c++) {
@@ -760,11 +800,10 @@ socket.on('gameState', (game) => {
         if (!piece || piece.color !== myColor) continue;
 
         const moves = getValidMoves(r, c);
-
-        // If captures exist, only mark those as selectable
-        const selectableMoves = mandatoryCaptures.length > 0
-          ? moves.filter(m => m.capture)
-          : moves;
+        const selectableMoves =
+          mandatoryCaptures.length > 0
+            ? moves.filter((m) => m.capture)
+            : moves;
 
         if (selectableMoves.length > 0) {
           getSquare(r, c).classList.add('selectable');
@@ -773,8 +812,35 @@ socket.on('gameState', (game) => {
     }
   }
 
-  console.log('🖼️ Board rendered and highlights updated.');
+  // ----------------------------
+  // Update turn indicator
+  // ----------------------------
+  updateTurnIndicator();
+  console.log(`⏱️ Turn indicator updated for ${currentTurn}`);
+
+  // ----------------------------
+  // Reset turn timer for current player
+  // ----------------------------
+  if (boardEnabled && typeof resetTurnTimer === 'function') {
+    console.log(`⏱️ Resetting turn timer for ${myPlayerId}`);
+    resetTurnTimer(myPlayerId);
+  }
+
+  console.log('✅ Board rendered and turn updated successfully.');
 });
+
+
+socket.on("turnTimerUpdate", ({ timeLeft, currentTurn }) => {
+  const timerEl = document.getElementById("turn-timer");
+  if (timerEl) timerEl.innerText = `${timeLeft}s`;
+
+  // If time runs out, fetch latest game state
+  if (timeLeft <= 0) {
+    console.log('⏱️ Turn timer ended, requesting new game state...');
+    socket.emit('requestGameState', { roomId, playerId: myPlayerId });
+  }
+});
+
 
 // ----------------------------
 // Handle game over separately
@@ -795,54 +861,10 @@ socket.on('gameOver', ({ winnerId, message, winningAmount, newBalance }) => {
 
 
 
-// -----------------
-// Listen for any move (self or opponent)
-// -----------------
-socket.on('playerMoveBroadcast', ({ playerId, fromRow, fromCol, toRow, toCol, captured }) => {
-  // Ignore move if it's already applied locally
-  if (playerId !== myPlayerId) {
-    makeMove({
-      from: { row: fromRow, col: fromCol },
-      to: { row: toRow, col: toCol },
-      capture: captured ? { row: captured[0], col: captured[1] } : null
-    });
-  }
 
-  // Update turn
-  currentTurn = (playerId === myPlayerId) ? getOpponentId() : myPlayerId;
-  updateTurnIndicator();
-});
-
-
-
-// -----------------
-// Listen for opponent moves
-// -----------------
-socket.on('opponentMove', ({ fromRow, fromCol, toRow, toCol, captured }) => {
-  // Move the piece on the local board
-  const piece = board[fromRow][fromCol];
-  board[toRow][toCol] = piece;
-  board[fromRow][fromCol] = null;
-
-  // Remove captured piece if any
-  if (captured) {
-    board[captured[0]][captured[1]] = null;
-  }
-
-  // Re-render board without resetting everything
-  renderBoard();
-
-  console.log(`📦 Opponent moved: (${fromRow},${fromCol}) -> (${toRow},${toCol})`);
-  if (captured) console.log(`💀 Captured piece at: (${captured[0]},${captured[1]})`);
-
-  // ✅ Do not change currentTurn here
-  // The next turn will be updated when 'gameState' is received from server
-});
-
-// -----------------
-// Game Over Handler
-// -----------------
  
+let turnCountdown = document.getElementById('turnCountdown');
+
 
 
 
@@ -868,3 +890,7 @@ window.addEventListener('beforeunload', () => {
   const possibleWinAmount = stake * 2 * 0.9; // 10% deduction
   const possibleWinDisplay = document.getElementById('possibleWin');
   possibleWinDisplay.textContent = `Possible Win: ${possibleWinAmount.toFixed(2)} birr`;
+
+// -----------------
+// Restart
+// -----------------

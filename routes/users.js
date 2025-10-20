@@ -4,7 +4,7 @@ const User = require('../models/user');
 const Tournament = require('../models/tournament');
 const Fixture = require('../models/fixture');
 
-// ✅ Get all users (optional for listing, can keep or remove)
+// ✅ Get all users
 router.get('/', async (req, res) => {
   try {
     const users = await User.find();
@@ -15,10 +15,46 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ✅ Delete user by ID (optional for cleanup, can keep or remove)
-router.delete('/:id', async (req, res) => {
+// ✅ Update balance by Telegram ID
+// ✅ Update user balance by telegram_id
+router.put('/:telegramId/balance', async (req, res) => {
   try {
-    await User.findByIdAndDelete(req.params.id);
+    const { telegramId } = req.params;
+    const { change } = req.body; // positive or negative number
+
+    if (!change || isNaN(change)) {
+      return res.status(400).json({ message: 'Invalid balance change value' });
+    }
+
+    // Find user by telegram_id
+    const user = await User.findOne({ telegram_id: telegramId });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Update balance
+    user.oneVsOne_balance = (user.oneVsOne_balance || 0) + change;
+    await user.save();
+
+    res.json({
+      message: 'Balance updated successfully',
+      balance: user.oneVsOne_balance
+    });
+  } catch (err) {
+    console.error('Error updating balance:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+
+// ✅ Delete user by Telegram ID
+router.delete('/:telegramId', async (req, res) => {
+  try {
+    const { telegramId } = req.params;
+    const user = await User.findOneAndDelete({ telegram_id: telegramId });
+
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
     res.json({ message: 'User deleted successfully' });
   } catch (err) {
     console.error('Error deleting user:', err);
@@ -26,6 +62,7 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ✅ Get fixtures for a user by Telegram ID
 router.get('/:telegramId/fixtures', async (req, res) => {
   try {
     const { telegramId } = req.params;
@@ -34,28 +71,21 @@ router.get('/:telegramId/fixtures', async (req, res) => {
       return res.status(400).json({ message: 'telegramId is required' });
     }
 
-    // Find user by Telegram ID
     const user = await User.findOne({ telegram_id: telegramId });
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Find tournaments where the user is a player
     const tournaments = await Tournament.find({ players: user._id });
-
     if (!tournaments.length) {
       return res.status(404).json({ message: 'User is not part of any tournament' });
     }
 
-    // Get all tournament IDs user participates in
     const tournamentIds = tournaments.map(t => t._id);
-
-    // Find fixtures in all these tournaments
     const fixtures = await Fixture.find({ tournament: { $in: tournamentIds } })
       .populate('player1', 'name telegram_id')
       .populate('player2', 'name telegram_id')
-      .populate('tournament', 'uniqueId type balance') // Also populate tournament info for each fixture
+      .populate('tournament', 'uniqueId type balance')
       .sort({ createdAt: 1 });
 
-    // Format fixtures with status included
     const formattedFixtures = fixtures.map((fx, idx) => {
       const isUserInFixture =
         (fx.player1 && fx.player1.telegram_id === telegramId) ||
@@ -79,8 +109,7 @@ router.get('/:telegramId/fixtures', async (req, res) => {
       };
     });
 
-    // Optionally, send back user info and the list of tournaments
-    return res.json({
+    res.json({
       user: { name: user.name },
       tournaments: tournaments.map(t => ({
         uniqueId: t.uniqueId,
@@ -91,9 +120,8 @@ router.get('/:telegramId/fixtures', async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching fixtures:', err);
-    return res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
-
 
 module.exports = router;
